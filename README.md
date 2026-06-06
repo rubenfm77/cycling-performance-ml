@@ -69,7 +69,7 @@ python main.py --module fatigue   # Anomaly detection only
 
 The PMC is the backbone of endurance training. It models fitness (CTL — 42-day exponential weighted mean of daily TSS) against fatigue (ATL — 7-day EWM) to derive form (TSB = CTL − ATL).
 
-![PMC](outputs/pmc_full.png)
+![PMC](pmc_full.png)
 
 ### Fatigue State Distribution — 944 Sessions
 
@@ -97,7 +97,7 @@ Classifier ROC-AUC : 1.000 ± 0.000   (5-fold CV)
 Regressor R²       : 0.993 ± 0.011   (5-fold CV)
 ```
 
-![FTP Analysis](outputs/ftp_analysis.png)
+![FTP Analysis](ftp_analysis.png)
 
 ### Feature Importance (MDI)
 
@@ -145,7 +145,7 @@ FTP Stimulus Score = IF² × Duration × 100. Validated against known FTP tests.
 
 ## ⚡ 3. W/kg Progression & Forecast
 
-![W/kg Progression](outputs/wkg_progression.png)
+![W/kg Progression](wkg_progression.png)
 
 ### Regression Analysis — Two Phases
 
@@ -173,7 +173,7 @@ FTP Stimulus Score = IF² × Duration × 100. Validated against known FTP tests.
 
 **Method:** K-Means (K=6, optimal by Silhouette score=0.207) + PCA (58.4% variance explained in 2 components)
 
-![Clustering](outputs/clustering.png)
+![Clustering](clustering.png)
 
 ### Cluster Profiles
 
@@ -196,7 +196,7 @@ FTP Stimulus Score = IF² × Duration × 100. Validated against known FTP tests.
 
 **Method:** Isolation Forest (contamination=5%, 200 estimators)
 
-![Fatigue Detection](outputs/fatigue_detection.png)
+![Fatigue Detection](fatigue_detection.png)
 
 ```
 Sessions analysed : 684 (with full physiological data)
