@@ -1,0 +1,11 @@
+# cycling-performance-ml
+data/*.xlsx
+data/*.csv
+outputs/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+*.egg-info/
+dist/
+build/
