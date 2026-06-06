@@ -49,7 +49,7 @@ cycling-performance-ml/
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/cycling-performance-ml.git
+git clone https://github.com/rubenfm77/cycling-performance-ml.git
 cd cycling-performance-ml
 
 # 2. Install dependencies
