@@ -163,7 +163,7 @@ FTP Stimulus Score = IF² × Duration × 100. Validated against known FTP tests.
 | Jul 2026 | 2.66 | 2.46 – 2.87 |
 | Aug 2026 | 2.64 | 2.44 – 2.85 |
 
-> ⚠️ **Important caveat:** The post-surgery forecast uses only 6 months of data, heavily influenced by Gemini's suboptimal planning (single quality session per week, excessive rest). The trend is expected to reverse as structured 2-day quality training resumes. The pre-surgery slope (+0.07 W/kg/year) is a more realistic long-term model once CTL > 80.
+> ⚠️ **Important caveat:** The post-surgery forecast uses only 6 months of data, heavily influenced by self planning (single quality session per week, excessive rest). The trend is expected to reverse as structured 2-day quality training resumes. The pre-surgery slope (+0.07 W/kg/year) is a more realistic long-term model once CTL > 80.
 
 ---
 
