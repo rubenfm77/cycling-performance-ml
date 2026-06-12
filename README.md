@@ -16,7 +16,7 @@
 The project includes a **Streamlit dashboard** (`app.py`) for real-time training
 monitoring, deployable to Streamlit Community Cloud and usable from a phone.
 
-> 🔗 **Live app:** _coming soon — deployment in progress_
+> 🔗 **Live app:** https://cycling-performance-ml-gwl7kzbkctmdgnatg2jvnt.streamlit.app/
 
 **Dashboard features:**
 
@@ -371,7 +371,7 @@ toward pre-accident 4.8 W/kg (275W) by mid-2027.
 - [x] Streamlit dashboard for real-time training monitoring
 - [x] Power duration curve (session-level best efforts by duration bucket)
 - [x] Time-in-zones analysis from Intervals.icu per-second data
-- [ ] Deploy dashboard to Streamlit Community Cloud (phone access)
+- [x] Deploy dashboard to Streamlit Community Cloud (phone access)
 - [ ] Raw `.fit` file parsing for true power duration curve (PDC) analysis
 - [ ] W' (W-prime) depletion modelling per session
 - [ ] Heart rate variability correlation (if HRV data available)
