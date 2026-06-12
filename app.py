@@ -77,6 +77,66 @@ FTP_DRIVERS = ["FTP", "SST", "TEMPO", "PIRAMIDAL", "VO2MAX", "BILLAT", "Q-I INTE
 BASE_TYPES  = ["END", "AEROBIC BASE", "FATMAX", "TORQUE"]
 
 
+XLSX_RENAME = {
+    "Activity Date": "date",
+    "TRAINING_TYPE": "training_type",
+    "TSS": "tss",
+    "IF": "if_score",
+    "PowerAverage": "power_avg",
+    "TimeTotalInHours": "duration_h",
+    "HeartRateAverage": "hr_avg",
+    "WEIGHT_KG": "weight",
+    "Elevation Gain": "elevation",
+    "icu_eftp": "eftp",
+    "icu_fitness": "icu_ctl",
+    "icu_fatigue": "icu_atl",
+}
+
+
+def fetch_historical_xlsx():
+    """Download the historical JOIN_STRAVA_TP.xlsx from a private URL.
+
+    Used on Streamlit Cloud to provide the full labelled 2019+ history.
+    Requires in the app's Secrets:
+        HIST_DATA_URL = "https://...direct-download-link...xlsx"
+    """
+    try:
+        url = st.secrets["HIST_DATA_URL"]
+    except Exception:
+        return None
+
+    # Normalize share links from OneDrive / Dropbox / Google Drive
+    # into direct-download URLs, so any pasted link just works.
+    if "1drv.ms" in url or "onedrive.live.com" in url:
+        import base64
+        b64 = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+        url = f"https://api.onedrive.com/v1.0/shares/u!{b64}/root/content"
+    elif "dropbox.com" in url:
+        url = url.replace("dl=0", "dl=1")
+        if "dl=1" not in url:
+            url += ("&" if "?" in url else "?") + "dl=1"
+    elif "drive.google.com" in url and "/file/d/" in url:
+        file_id = url.split("/file/d/")[1].split("/")[0]
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    import io
+    import requests
+    try:
+        r = requests.get(url, timeout=60)
+        r.raise_for_status()
+        df = pd.read_excel(io.BytesIO(r.content))
+    except Exception as e:
+        st.warning(f"Could not load historical data file: {e}")
+        return None
+
+    df = df.rename(columns=XLSX_RENAME)
+    if "date" not in df.columns:
+        st.warning("Historical file loaded but has an unexpected format.")
+        return None
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df.dropna(subset=["date"]).reset_index(drop=True)
+
+
 def fetch_from_intervals_icu():
     """Fetch activities directly from the Intervals.icu API.
 
@@ -170,24 +230,23 @@ def load_data():
                 df = pd.read_csv(p)
             else:
                 df = pd.read_excel(p)
-                df = df.rename(columns={
-                    "Activity Date": "date",
-                    "TRAINING_TYPE": "training_type",
-                    "TSS": "tss",
-                    "IF": "if_score",
-                    "PowerAverage": "power_avg",
-                    "TimeTotalInHours": "duration_h",
-                    "HeartRateAverage": "hr_avg",
-                    "WEIGHT_KG": "weight",
-                    "Elevation Gain": "elevation",
-                    "icu_eftp": "eftp",
-                    "icu_fitness": "icu_ctl",
-                    "icu_fatigue": "icu_atl",
-                })
+                df = df.rename(columns=XLSX_RENAME)
             break
 
     if df is None:
-        df = fetch_from_intervals_icu()
+        hist = fetch_historical_xlsx()
+        api  = fetch_from_intervals_icu()
+        if hist is not None and api is not None:
+            hist["date"] = pd.to_datetime(hist["date"], errors="coerce")
+            api["date"]  = pd.to_datetime(api["date"], errors="coerce")
+            cutoff = hist["date"].max()
+            api_new = api[api["date"] > cutoff]
+            common = [c for c in hist.columns if c in api.columns]
+            df = pd.concat(
+                [hist, api_new[common]], ignore_index=True
+            )
+        else:
+            df = hist if hist is not None else api
 
     if df is None:
         st.error(
