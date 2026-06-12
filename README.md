@@ -16,7 +16,7 @@
 The project includes a **Streamlit dashboard** (`app.py`) for real-time training
 monitoring, deployable to Streamlit Community Cloud and usable from a phone.
 
-> 🔗 **Live app:** _coming soon — deployment in progress_](https://cycling-performance-ml-gwl7kzbkctmdgnatg2jvnt.streamlit.app/
+> 🔗 **Live app:** https://cycling-performance-ml-gwl7kzbkctmdgnatg2jvnt.streamlit.app/
 
 **Dashboard features:**
 
