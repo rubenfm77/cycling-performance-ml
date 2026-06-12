@@ -218,6 +218,58 @@ def fetch_from_intervals_icu():
 
 
 @st.cache_data(ttl=3600)
+def fetch_true_power_curve():
+    """Fetch real per-second power-duration curves from Intervals.icu.
+
+    Returns a dict {curve_label: (secs_list, watts_list)} or None.
+    Only works when API secrets are configured (cloud or local secrets.toml).
+    """
+    try:
+        athlete_id = st.secrets["INTERVALS_ATHLETE_ID"]
+        api_key    = st.secrets["INTERVALS_API_KEY"]
+    except Exception:
+        return None
+
+    import requests
+    try:
+        r = requests.get(
+            f"https://intervals.icu/api/v1/athlete/{athlete_id}/power-curves",
+            params={"curves": "all,1y,90d", "type": "Ride"},
+            auth=("API_KEY", api_key),
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return None
+
+    curves = {}
+    try:
+        if isinstance(data, dict) and "curves" in data:
+            secs = data.get("secs") or data.get("seconds")
+            for c in data["curves"]:
+                watts = c.get("watts") or c.get("values")
+                label = str(c.get("name") or c.get("label")
+                            or c.get("curve") or "curve")
+                s = c.get("secs") or secs
+                if s is not None and watts:
+                    curves[label] = (list(s), list(watts))
+        elif isinstance(data, list):
+            for c in data:
+                if not isinstance(c, dict):
+                    continue
+                s = c.get("secs") or c.get("seconds")
+                watts = c.get("watts") or c.get("values")
+                label = str(c.get("name") or c.get("label")
+                            or c.get("curve") or "curve")
+                if s and watts:
+                    curves[label] = (list(s), list(watts))
+    except Exception:
+        return None
+    return curves or None
+
+
+@st.cache_data(ttl=3600)
 def load_data():
     paths = [
         "data/combined_training_data.csv",
@@ -929,6 +981,37 @@ else:
 
 st.markdown("---")
 
+# ── True power-duration curve from Intervals.icu (per-second data) ───────────
+_pdc = fetch_true_power_curve()
+if _pdc:
+    st.markdown("### ⚡ True Power-Duration Curve (Intervals.icu)")
+    st.caption(
+        "Real per-second bests — covers the period Intervals.icu has full "
+        "ride files for."
+    )
+    _PDC_COLORS = [C["purple"], C["green"], C["yellow"], C["accent"]]
+    _ticks = [1, 5, 15, 60, 300, 1200, 3600, 10800]
+    _tick_lbl = ["1s", "5s", "15s", "1m", "5m", "20m", "1h", "3h"]
+    fig_pdc = go.Figure()
+    for i, (label, (secs, watts)) in enumerate(_pdc.items()):
+        pts = [(s, w) for s, w in zip(secs, watts)
+               if w is not None and s and s >= 1]
+        if not pts:
+            continue
+        fig_pdc.add_trace(go.Scatter(
+            x=[p[0] for p in pts], y=[p[1] for p in pts],
+            mode="lines", name=label,
+            line=dict(color=_PDC_COLORS[i % len(_PDC_COLORS)], width=2.5),
+        ))
+    fig_pdc.add_hline(y=FTP_CURRENT, line_dash="dot", line_color=C["yellow"],
+                      annotation_text=f"FTP {FTP_CURRENT}W")
+    fig_pdc.update_layout(height=400, **PLOTLY_LAYOUT)
+    fig_pdc.update_xaxes(type="log", tickvals=_ticks, ticktext=_tick_lbl,
+                         title_text="Duration")
+    fig_pdc.update_yaxes(title_text="Watts")
+    st.plotly_chart(fig_pdc, use_container_width=True)
+    st.markdown("---")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FTP PROGRESSION — month by month
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1167,6 +1250,101 @@ else:
     fig_yoy.update_xaxes(title_text="Week of block")
     st.plotly_chart(fig_yoy, use_container_width=True)
 
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PERIODISATION BLOCKS — auto-detected from weekly load, ramp & intensity mix
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🧱 Periodisation Blocks (auto-detected)")
+st.caption(
+    "Heuristic phase detection: weekly TSS vs recent norm, CTL ramp, and the "
+    "share of TSS from quality sessions (FTP/SST/TEMPO/PIRAMIDAL/VO2MAX/"
+    "BILLAT/Q-I)."
+)
+
+_p = df_all.copy()
+_p["tss"] = pd.to_numeric(_p["tss"], errors="coerce").fillna(0)
+_p["is_q"] = _p["training_type"].isin(FTP_DRIVERS)
+_p["q_tss"] = np.where(_p["is_q"], _p["tss"], 0.0)
+
+wk_blocks = _p.resample("W", on="date").agg(
+    tss=("tss", "sum"), q_tss=("q_tss", "sum"), ctl=("ctl", "last"),
+)
+wk_blocks["ctl"] = wk_blocks["ctl"].ffill()
+wk_blocks["ramp"] = wk_blocks["ctl"].diff()
+wk_blocks["q_share"] = np.where(
+    wk_blocks["tss"] > 0, wk_blocks["q_tss"] / wk_blocks["tss"], 0.0
+)
+wk_blocks["tss_norm"] = wk_blocks["tss"].rolling(8, min_periods=4).median()
+
+
+def _phase(row):
+    if row["tss"] == 0:
+        return "Off"
+    norm = row["tss_norm"] if row["tss_norm"] and row["tss_norm"] > 0 else row["tss"]
+    if row["tss"] < 0.55 * norm or (row["ramp"] is not None
+                                    and row["ramp"] < -2.0):
+        return "Recovery"
+    if row["q_share"] >= 0.25:
+        return "Build"
+    if row["ramp"] is not None and row["ramp"] > 0.2:
+        return "Base"
+    return "Maintain"
+
+
+wk_blocks["phase"] = wk_blocks.apply(_phase, axis=1)
+
+PHASE_COLORS = {
+    "Base": C["accent"], "Build": C["green"], "Recovery": C["yellow"],
+    "Maintain": C["muted"], "Off": "#30363d",
+}
+
+fig_blocks = go.Figure()
+for ph, color in PHASE_COLORS.items():
+    sub = wk_blocks[wk_blocks["phase"] == ph]
+    if len(sub) == 0:
+        continue
+    fig_blocks.add_trace(go.Bar(
+        x=sub.index, y=sub["tss"], name=ph, marker_color=color, opacity=0.85,
+    ))
+fig_blocks.add_trace(go.Scatter(
+    x=wk_blocks.index, y=wk_blocks["ctl"] * 4,
+    name="CTL (scaled x4)", mode="lines",
+    line=dict(color="#e6edf3", width=1.5, dash="dot"),
+))
+fig_blocks.update_layout(
+    barmode="overlay", title="Weekly TSS coloured by detected phase",
+    height=380, **PLOTLY_LAYOUT
+)
+st.plotly_chart(fig_blocks, use_container_width=True)
+
+_recent = wk_blocks[wk_blocks["phase"] != "Off"]
+if len(_recent) > 0:
+    cur_phase = _recent["phase"].iloc[-1]
+    streak = 0
+    for ph in reversed(_recent["phase"].tolist()):
+        if ph == cur_phase:
+            streak += 1
+        else:
+            break
+    _phase_tips = {
+        "Build": "Quality block in progress — protect the two hard days, "
+                 "keep everything else genuinely easy.",
+        "Base": "Volume phase — CTL is climbing on aerobic work. Add quality "
+                "when the ramp flattens.",
+        "Recovery": "Absorbing the work — resist adding intensity this week.",
+        "Maintain": "Holding pattern — fine short-term, but FTP needs a Build "
+                    "block to move.",
+    }
+    st.markdown(
+        f'<div style="background:{PHASE_COLORS.get(cur_phase, C["muted"])}22; '
+        f'border:1px solid {PHASE_COLORS.get(cur_phase, C["muted"])}; '
+        f'border-radius:8px; padding:12px; color:{C["text"]};">'
+        f'🧱 Current phase: <b>{cur_phase}</b> ({streak} week'
+        f'{"s" if streak != 1 else ""}). '
+        f'{_phase_tips.get(cur_phase, "")}</div>',
+        unsafe_allow_html=True
+    )
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
