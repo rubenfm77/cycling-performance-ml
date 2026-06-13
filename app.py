@@ -818,7 +818,7 @@ st.markdown("## ⚡ Power & Efficiency")
 col1, col2 = st.columns(2)
 
 with col1:
-    monthly = df.resample("ME", on="date").agg(
+    monthly = df.resample("MS", on="date").agg(
         avg_wkg=("w_per_kg", "mean"),
         max_wkg=("w_per_kg", "max"),
     ).reset_index()
@@ -851,7 +851,7 @@ with col1:
     st.plotly_chart(fig_wkg, use_container_width=True)
 
 with col2:
-    monthly_eff = df.resample("ME", on="date").agg(
+    monthly_eff = df_12m.resample("MS", on="date").agg(
         avg_eff=("efficiency", "mean")
     ).reset_index().dropna()
 
@@ -864,7 +864,7 @@ with col2:
         fill="tozeroy", fillcolor="rgba(240,136,62,0.1)"
     ))
     fig_eff.update_layout(
-        title="Cardiac Efficiency (W per BPM) — Higher = Better",
+        title="Cardiac Efficiency (W per BPM, last 12 months) — Higher = Better",
         height=350, **PLOTLY_LAYOUT
     )
     st.plotly_chart(fig_eff, use_container_width=True)
@@ -1050,7 +1050,7 @@ else:
 
 monthly_ftp = (
     src.dropna(subset=["ftp_metric"])
-    .resample("ME", on="date")["ftp_metric"]
+    .resample("MS", on="date")["ftp_metric"]
     .max()
     .reset_index()
     .dropna()
@@ -1283,7 +1283,7 @@ if _has_wprime:
     wp["w_prime"] = pd.to_numeric(wp["w_prime"], errors="coerce")
     wp_m = (
         wp.dropna(subset=["w_prime"])
-        .resample("ME", on="date")
+        .resample("MS", on="date")
         .agg(cp=("cp", "last"), w_prime=("w_prime", "last"))
         .dropna(subset=["w_prime"])
         .reset_index()
