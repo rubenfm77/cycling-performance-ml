@@ -90,6 +90,8 @@ XLSX_RENAME = {
     "icu_eftp": "eftp",
     "icu_fitness": "icu_ctl",
     "icu_fatigue": "icu_atl",
+    "icu_pm_cp": "cp",
+    "icu_pm_w_prime": "w_prime",
 }
 
 
@@ -197,6 +199,8 @@ def fetch_from_intervals_icu():
     df["elevation"]  = g("total_elevation_gain")
     df["weight"]     = g("icu_weight")
     df["eftp"]       = g("icu_eftp")
+    df["cp"]         = g("icu_pm_cp")
+    df["w_prime"]    = g("icu_pm_w_prime")
     df["icu_ctl"]    = g("icu_fitness")
     df["icu_atl"]    = g("icu_fatigue")
     for zc in [f"z{i}_secs" for i in range(1, 8)]:
@@ -313,7 +317,9 @@ def load_data():
 
     for src_col, dst_col in [("icu_eftp", "eftp"),
                              ("icu_fitness", "icu_ctl"),
-                             ("icu_fatigue", "icu_atl")]:
+                             ("icu_fatigue", "icu_atl"),
+                             ("icu_pm_cp", "cp"),
+                             ("icu_pm_w_prime", "w_prime")]:
         if dst_col not in df.columns and src_col in df.columns:
             df[dst_col] = df[src_col]
 
@@ -405,6 +411,10 @@ cutoff = datetime.now() - timedelta(days=days_map[date_range])
 df = df_all[df_all["date"] >= cutoff].copy()
 df_main_all = df_all[df_all["training_type"].isin(MAIN_TYPES)].copy()
 df_main     = df[df["training_type"].isin(MAIN_TYPES)].copy()
+
+# Fixed 12-month window for trend charts that should always read "recent".
+_12m_cut = pd.Timestamp.now() - timedelta(days=365)
+df_12m   = df_all[df_all["date"] >= _12m_cut].copy()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -1097,15 +1107,16 @@ st.markdown("---")
 # ELEVATION — climbing volume
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## ⛰️ Climbing Volume")
+st.caption("Last 12 months.")
 
-if "elevation" in df.columns:
-    elev_series = pd.to_numeric(df["elevation"], errors="coerce").fillna(0)
+if "elevation" in df_12m.columns:
+    elev_series = pd.to_numeric(df_12m["elevation"], errors="coerce").fillna(0)
     total_elev  = elev_series.sum()
-    dur_sum     = pd.to_numeric(df["duration_h"], errors="coerce").sum()
+    dur_sum     = pd.to_numeric(df_12m["duration_h"], errors="coerce").sum()
     climb_rate  = total_elev / dur_sum if dur_sum > 0 else 0
 
     weekly_elev = (
-        df.assign(elev=elev_series)
+        df_12m.assign(elev=elev_series)
         .resample("W", on="date")["elev"]
         .sum()
         .reset_index()
@@ -1251,6 +1262,79 @@ else:
     st.plotly_chart(fig_yoy, use_container_width=True)
 
 st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W' & CRITICAL POWER — anaerobic capacity (Intervals.icu power model)
+# ══════════════════════════════════════════════════════════════════════════════
+_has_wprime = "w_prime" in df_all.columns and \
+    pd.to_numeric(df_all["w_prime"], errors="coerce").notna().sum() > 2
+
+if _has_wprime:
+    st.markdown("## 🔋 W' & Critical Power (anaerobic battery)")
+    st.caption(
+        "CP (Critical Power) is the power you can hold almost indefinitely — "
+        "close to FTP. W' (\"W-prime\") is your anaerobic battery: the energy "
+        "in joules available above CP for attacks, surges and steep ramps. "
+        "Both estimated by Intervals.icu from your power-duration data."
+    )
+
+    wp = df_all.copy()
+    wp["cp"]      = pd.to_numeric(wp["cp"], errors="coerce")
+    wp["w_prime"] = pd.to_numeric(wp["w_prime"], errors="coerce")
+    wp_m = (
+        wp.dropna(subset=["w_prime"])
+        .resample("ME", on="date")
+        .agg(cp=("cp", "last"), w_prime=("w_prime", "last"))
+        .dropna(subset=["w_prime"])
+        .reset_index()
+    )
+
+    if len(wp_m) > 0:
+        cur_cp = wp_m["cp"].iloc[-1] if pd.notna(wp_m["cp"].iloc[-1]) else None
+        cur_wp = wp_m["w_prime"].iloc[-1]
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Current W'", f"{cur_wp/1000:.1f} kJ")
+        with c2:
+            st.metric("Current CP", f"{cur_cp:.0f} W" if cur_cp else "—")
+        with c3:
+            # ~how long you can hold a hard attack above CP, e.g. +50W
+            if cur_cp:
+                secs = cur_wp / 50.0
+                st.metric("Battery @ CP+50W", f"{secs/60:.1f} min")
+            else:
+                st.metric("Battery @ CP+50W", "—")
+
+        fig_wp = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_wp.add_trace(go.Scatter(
+            x=wp_m["date"], y=wp_m["w_prime"] / 1000.0,
+            mode="lines+markers", name="W' (kJ)",
+            line=dict(color=C["purple"], width=2.5),
+        ), secondary_y=False)
+        fig_wp.add_trace(go.Scatter(
+            x=wp_m["date"], y=wp_m["cp"],
+            mode="lines+markers", name="CP (W)",
+            line=dict(color=C["green"], width=2.5),
+        ), secondary_y=True)
+        fig_wp.update_layout(title="W' and Critical Power over time",
+                             height=380, **PLOTLY_LAYOUT)
+        fig_wp.update_yaxes(title_text="W' (kJ)", secondary_y=False)
+        fig_wp.update_yaxes(title_text="CP (W)", secondary_y=True)
+        st.plotly_chart(fig_wp, use_container_width=True)
+
+        st.markdown(
+            f'<div style="background:{C["purple"]}22; border:1px solid '
+            f'{C["purple"]}; border-radius:8px; padding:12px; '
+            f'color:{C["text"]};">'
+            f'🔋 As a 57kg pure climber your W\' will always be modest — '
+            f'that is normal and not a weakness. Your edge is a high, '
+            f'sustainable CP/FTP relative to weight, not a big anaerobic '
+            f'punch. Track W\' mainly so a sudden drop flags fatigue or '
+            f'detraining.</div>',
+            unsafe_allow_html=True
+        )
+    st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PERIODISATION BLOCKS — auto-detected from weekly load, ramp & intensity mix
