@@ -31,8 +31,7 @@ st.markdown("""
     div[data-testid="stMetricDelta"] { font-size: 0.9rem; }
     .state-box { border-radius: 8px; padding: 12px 20px;
                  text-align: center; font-weight: bold; font-size: 1.1rem; }
-    .week-card { background: #161b22; border: 1px solid #30363d;
-                 border-radius: 10px; padding: 16px; margin: 4px; }
+    .alert-box { border-radius: 8px; padding: 14px 18px; margin: 8px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,20 +42,10 @@ C = {
     "yellow": "#d29922", "purple": "#bc8cff",
 }
 
-# ── Athlete constants — update here when FTP changes ─────────────────────────
-FTP_CURRENT = 240          # validated 10 Jun 2026 — 4x10min @ 240-242W, stable HR
-FTP_PRE     = 275          # pre-accident reference
-WEIGHT_KG   = 57.0
-WKG_CURRENT = FTP_CURRENT / WEIGHT_KG   # ~4.21 W/kg
-WKG_PRE     = FTP_PRE / WEIGHT_KG       # ~4.82 W/kg
-
 STATE_COLORS = {
-    "Undertrained": C["muted"],
-    "Overreached": C["red"],
-    "Deep Block": C["orange"],
-    "Build Phase": C["yellow"],
-    "Neutral": C["accent"],
-    "Fresh": C["green"],
+    "Undertrained": C["muted"], "Overreached": C["red"],
+    "Deep Block": C["orange"], "Build Phase": C["yellow"],
+    "Neutral": C["accent"], "Fresh": C["green"],
     "Peak/Detrain Risk": C["purple"],
 }
 
@@ -72,213 +61,13 @@ MAIN_TYPES = [
     "END", "AEROBIC BASE", "FTP", "FATMAX", "VO2MAX",
     "SST", "TEMPO", "TORQUE", "Q-I INTERVALS", "BILLAT", "PIRAMIDAL"
 ]
-
 FTP_DRIVERS = ["FTP", "SST", "TEMPO", "PIRAMIDAL", "VO2MAX", "BILLAT", "Q-I INTERVALS"]
-BASE_TYPES  = ["END", "AEROBIC BASE", "FATMAX", "TORQUE"]
-
-
-XLSX_RENAME = {
-    "Activity Date": "date",
-    "TRAINING_TYPE": "training_type",
-    "TSS": "tss",
-    "IF": "if_score",
-    "PowerAverage": "power_avg",
-    "TimeTotalInHours": "duration_h",
-    "HeartRateAverage": "hr_avg",
-    "WEIGHT_KG": "weight",
-    "Elevation Gain": "elevation",
-    "icu_eftp": "eftp",
-    "icu_fitness": "icu_ctl",
-    "icu_fatigue": "icu_atl",
-    "icu_pm_cp": "cp",
-    "icu_pm_w_prime": "w_prime",
-}
-
-
-def fetch_historical_xlsx():
-    """Download the historical JOIN_STRAVA_TP.xlsx from a private URL.
-
-    Used on Streamlit Cloud to provide the full labelled 2019+ history.
-    Requires in the app's Secrets:
-        HIST_DATA_URL = "https://...direct-download-link...xlsx"
-    """
-    try:
-        url = st.secrets["HIST_DATA_URL"]
-    except Exception:
-        return None
-
-    # Normalize share links from OneDrive / Dropbox / Google Drive
-    # into direct-download URLs, so any pasted link just works.
-    if "1drv.ms" in url or "onedrive.live.com" in url:
-        import base64
-        b64 = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
-        url = f"https://api.onedrive.com/v1.0/shares/u!{b64}/root/content"
-    elif "dropbox.com" in url:
-        url = url.replace("dl=0", "dl=1")
-        if "dl=1" not in url:
-            url += ("&" if "?" in url else "?") + "dl=1"
-    elif "drive.google.com" in url and "/file/d/" in url:
-        file_id = url.split("/file/d/")[1].split("/")[0]
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-
-    import io
-    import requests
-    try:
-        r = requests.get(url, timeout=60)
-        r.raise_for_status()
-        df = pd.read_excel(io.BytesIO(r.content))
-    except Exception as e:
-        st.warning(f"Could not load historical data file: {e}")
-        return None
-
-    df = df.rename(columns=XLSX_RENAME)
-    if "date" not in df.columns:
-        st.warning("Historical file loaded but has an unexpected format.")
-        return None
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df.dropna(subset=["date"]).reset_index(drop=True)
-
-
-def fetch_from_intervals_icu():
-    """Fetch activities directly from the Intervals.icu API.
-
-    Used on Streamlit Cloud, where the local data/ folder doesn't exist.
-    Requires two values in the app's Secrets:
-        INTERVALS_ATHLETE_ID = "i123456"
-        INTERVALS_API_KEY    = "your-api-key"
-    """
-    try:
-        athlete_id = st.secrets["INTERVALS_ATHLETE_ID"]
-        api_key    = st.secrets["INTERVALS_API_KEY"]
-    except Exception:
-        return None
-
-    import requests
-    try:
-        r = requests.get(
-            f"https://intervals.icu/api/v1/athlete/{athlete_id}/activities",
-            params={"oldest": "2019-01-01", "newest": "2031-12-31"},
-            auth=("API_KEY", api_key),
-            timeout=30,
-        )
-        r.raise_for_status()
-        acts = r.json()
-    except Exception as e:
-        st.error(f"Intervals.icu API error: {e}")
-        return None
-    if not acts:
-        return None
-
-    raw = pd.DataFrame(acts)
-    if "type" in raw.columns:
-        rides = raw[raw["type"].isin(["Ride", "VirtualRide", "GravelRide"])]
-        if len(rides) > 0:
-            raw = rides
-
-    def g(col):
-        return (pd.to_numeric(raw[col], errors="coerce")
-                if col in raw.columns
-                else pd.Series(np.nan, index=raw.index))
-
-    df = pd.DataFrame(index=raw.index)
-    df["date"] = pd.to_datetime(
-        raw["start_date_local"] if "start_date_local" in raw.columns
-        else raw.get("start_date"), errors="coerce"
-    ).dt.tz_localize(None)
-    df["tss"] = g("icu_training_load")
-    intensity = g("icu_intensity")
-    if intensity.notna().sum() > 0 and intensity.median(skipna=True) > 2:
-        intensity = intensity / 100.0
-    df["if_score"]   = intensity
-    pwr = g("icu_average_watts")
-    if pwr.notna().sum() == 0:
-        pwr = g("average_watts")
-    df["power_avg"]  = pwr
-    df["duration_h"] = g("moving_time") / 3600.0
-    df["hr_avg"]     = g("average_heartrate")
-    df["elevation"]  = g("total_elevation_gain")
-    df["weight"]     = g("icu_weight")
-    df["eftp"]       = g("icu_eftp")
-    df["cp"]         = g("icu_pm_cp")
-    df["w_prime"]    = g("icu_pm_w_prime")
-    df["icu_ctl"]    = g("icu_fitness")
-    df["icu_atl"]    = g("icu_fatigue")
-    for zc in [f"z{i}_secs" for i in range(1, 8)]:
-        df[zc] = g(zc)
-
-    names = (raw["name"] if "name" in raw.columns
-             else pd.Series([""] * len(raw), index=raw.index))
-    names = names.fillna("").astype(str).str.upper()
-
-    def map_type(n):
-        for t in ["PIRAMIDAL", "VO2MAX", "FATMAX", "BILLAT", "TORQUE",
-                  "TEMPO", "SST", "FTP", "Q-I", "AEROBIC BASE", "END"]:
-            if t in n:
-                return "Q-I INTERVALS" if t == "Q-I" else t
-        return "AEROBIC BASE"
-
-    df["training_type"] = [map_type(n) for n in names]
-    return df.dropna(subset=["date"]).reset_index(drop=True)
-
-
-@st.cache_data(ttl=3600)
-def fetch_true_power_curve():
-    """Fetch real per-second power-duration curves from Intervals.icu.
-
-    Returns a dict {curve_label: (secs_list, watts_list)} or None.
-    Only works when API secrets are configured (cloud or local secrets.toml).
-    """
-    try:
-        athlete_id = st.secrets["INTERVALS_ATHLETE_ID"]
-        api_key    = st.secrets["INTERVALS_API_KEY"]
-    except Exception:
-        return None
-
-    import requests
-    try:
-        r = requests.get(
-            f"https://intervals.icu/api/v1/athlete/{athlete_id}/power-curves",
-            params={"curves": "all,1y,90d", "type": "Ride"},
-            auth=("API_KEY", api_key),
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        return None
-
-    curves = {}
-    try:
-        if isinstance(data, dict) and "curves" in data:
-            secs = data.get("secs") or data.get("seconds")
-            for c in data["curves"]:
-                watts = c.get("watts") or c.get("values")
-                label = str(c.get("name") or c.get("label")
-                            or c.get("curve") or "curve")
-                s = c.get("secs") or secs
-                if s is not None and watts:
-                    curves[label] = (list(s), list(watts))
-        elif isinstance(data, list):
-            for c in data:
-                if not isinstance(c, dict):
-                    continue
-                s = c.get("secs") or c.get("seconds")
-                watts = c.get("watts") or c.get("values")
-                label = str(c.get("name") or c.get("label")
-                            or c.get("curve") or "curve")
-                if s and watts:
-                    curves[label] = (list(s), list(watts))
-    except Exception:
-        return None
-    return curves or None
+HOT_TEMP    = 28.0  # degrees C above which heat correction note appears
 
 
 @st.cache_data(ttl=3600)
 def load_data():
-    paths = [
-        "data/combined_training_data.csv",
-        "data/JOIN_STRAVA_TP.xlsx",
-    ]
+    paths = ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]
     df = None
     for p in paths:
         if Path(p).exists():
@@ -286,74 +75,87 @@ def load_data():
                 df = pd.read_csv(p)
             else:
                 df = pd.read_excel(p)
-                df = df.rename(columns=XLSX_RENAME)
+                df = df.rename(columns={
+                    "Activity Date":          "date",
+                    "TRAINING_TYPE":          "training_type",
+                    "TSS":                    "tss",
+                    "IF":                     "if_score",
+                    "PowerAverage":           "power_avg",
+                    "Weighted Average Power": "power_np",
+                    "PowerMax":               "power_max",
+                    "TimeTotalInHours":       "duration_h",
+                    "HeartRateAverage":       "hr_avg",
+                    "WEIGHT_KG":              "weight",
+                    "Elevation Gain":         "elevation",
+                    "DistanceInMeters":       "distance_m",
+                    "Average Cadence":        "cadence",
+                    "Average Temperature":    "temp_avg",
+                    "Variability":            "variability",
+                })
             break
 
     if df is None:
-        hist = fetch_historical_xlsx()
-        api  = fetch_from_intervals_icu()
-        if hist is not None and api is not None:
-            hist["date"] = pd.to_datetime(hist["date"], errors="coerce")
-            api["date"]  = pd.to_datetime(api["date"], errors="coerce")
-            cutoff = hist["date"].max()
-            api_new = api[api["date"] > cutoff]
-            common = [c for c in hist.columns if c in api.columns]
-            df = pd.concat(
-                [hist, api_new[common]], ignore_index=True
-            )
-        else:
-            df = hist if hist is not None else api
-
-    if df is None:
-        st.error(
-            "No data found. Locally: run `python src/intervals_api.py` first. "
-            "On Streamlit Cloud: add INTERVALS_ATHLETE_ID and "
-            "INTERVALS_API_KEY in the app Secrets."
-        )
+        st.error("No data found. Run python src/intervals_api.py first.")
         st.stop()
 
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
 
-    for src_col, dst_col in [("icu_eftp", "eftp"),
-                             ("icu_fitness", "icu_ctl"),
-                             ("icu_fatigue", "icu_atl"),
-                             ("icu_pm_cp", "cp"),
-                             ("icu_pm_w_prime", "w_prime")]:
-        if dst_col not in df.columns and src_col in df.columns:
-            df[dst_col] = df[src_col]
+    df["tss"]      = pd.to_numeric(df["tss"],       errors="coerce").fillna(0)
+    df["power_avg"]= pd.to_numeric(df["power_avg"], errors="coerce")
+    df["hr_avg"]   = pd.to_numeric(df["hr_avg"],    errors="coerce")
+    df["duration_h"]= pd.to_numeric(df["duration_h"],errors="coerce")
+    df["elevation"] = pd.to_numeric(df["elevation"], errors="coerce")
+    df["if_score"]  = pd.to_numeric(df["if_score"],  errors="coerce")
+    df["temp_avg"]  = pd.to_numeric(df.get("temp_avg", pd.Series(dtype=float)), errors="coerce")
 
-    df["tss"] = pd.to_numeric(df["tss"], errors="coerce").fillna(0)
     df["ctl"] = df["tss"].ewm(span=42, adjust=False).mean()
-    df["atl"] = df["tss"].ewm(span=7, adjust=False).mean()
+    df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
     df["tsb"] = df["ctl"] - df["atl"]
 
-    if "weight" in df.columns:
-        weight = pd.to_numeric(df["weight"], errors="coerce").fillna(WEIGHT_KG)
-    else:
-        weight = pd.Series([WEIGHT_KG] * len(df))
-    df["w_per_kg"] = pd.to_numeric(df["power_avg"], errors="coerce") / weight
+    weight = pd.to_numeric(df.get("weight", pd.Series([57.0]*len(df))),
+                           errors="coerce").fillna(57.0)
+    df["w_per_kg"]   = df["power_avg"] / weight
+    df["efficiency"] = np.where(df["hr_avg"] > 0, df["power_avg"] / df["hr_avg"], np.nan)
+    df["ftp_stimulus"]= (df["if_score"] ** 2) * df["duration_h"] * 100
 
-    hr  = pd.to_numeric(df["hr_avg"], errors="coerce")
-    pwr = pd.to_numeric(df["power_avg"], errors="coerce")
-    df["efficiency"] = np.where(hr > 0, pwr / hr, np.nan)
+    # ── Rolling efficiency metrics ────────────────────────────────────────────
+    df["eff_28d"]    = df["efficiency"].rolling(28, min_periods=5).mean()
+    df["eff_pct_vs_28d"] = (df["efficiency"] - df["eff_28d"]) / df["eff_28d"] * 100
+    df["pwr_hr_28d"] = df["efficiency"].rolling(28, min_periods=5).mean()
 
-    if_s = pd.to_numeric(df["if_score"], errors="coerce")
-    dur  = pd.to_numeric(df["duration_h"], errors="coerce")
-    df["ftp_stimulus"] = (if_s ** 2) * dur * 100
+    # ── Session quality score (0-100) ─────────────────────────────────────────
+    # Combines: efficiency vs 28d avg + TSS + IF
+    df["quality_score"] = np.nan
+    valid = df["efficiency"].notna() & df["eff_28d"].notna()
+    eff_z   = (df.loc[valid, "efficiency"] - df.loc[valid, "eff_28d"]) / \
+              df.loc[valid, "eff_28d"].std().clip(lower=0.01)
+    tss_z   = (df.loc[valid, "tss"] - df.loc[valid, "tss"].mean()) / \
+              df.loc[valid, "tss"].std().clip(lower=0.01)
+    if_z    = (df.loc[valid, "if_score"] - df.loc[valid, "if_score"].mean()) / \
+              df.loc[valid, "if_score"].std().clip(lower=0.01)
+    raw_score = (eff_z * 0.5 + tss_z * 0.3 + if_z * 0.2)
+    min_s, max_s = raw_score.min(), raw_score.max()
+    if max_s > min_s:
+        df.loc[valid, "quality_score"] = ((raw_score - min_s) / (max_s - min_s) * 100).clip(0, 100)
+
+    # ── Norwegian Method compliance ───────────────────────────────────────────
+    # Quality session = IF >= 0.85 (true threshold zone)
+    df["is_quality"]      = df["if_score"] >= 0.85
+    df["is_z3_drift"]     = (df["if_score"] >= 0.75) & (df["if_score"] < 0.85)
+    df["is_true_z2"]      = df["if_score"] < 0.75
+    df["is_hot_session"]  = df["temp_avg"] > HOT_TEMP
+
+    df["year"]  = df["date"].dt.year
+    df["month"] = df["date"].dt.to_period("M")
+    df["week"]  = df["date"].dt.to_period("W")
 
     conditions = [
-        df["ctl"] < 30,
-        df["tsb"] < -30,
-        df["tsb"] < -10,
-        df["tsb"] < 0,
-        df["tsb"] < 10,
-        df["tsb"] < 25,
+        df["ctl"] < 30, df["tsb"] < -30, df["tsb"] < -10,
+        df["tsb"] < 0,  df["tsb"] < 10,  df["tsb"] < 25,
     ]
-    choices = [
-        "Undertrained", "Overreached", "Deep Block",
-        "Build Phase", "Neutral", "Fresh"
-    ]
+    choices = ["Undertrained", "Overreached", "Deep Block",
+               "Build Phase", "Neutral", "Fresh"]
     df["fatigue_state"] = np.select(conditions, choices, default="Peak/Detrain Risk")
     return df
 
@@ -368,18 +170,16 @@ def load_wellness():
     return pd.DataFrame()
 
 
-df_all  = load_data()
+df_all   = load_data()
 wellness = load_wellness()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🚴 Cycling Performance")
     st.markdown("---")
-
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-
     st.markdown("### Filters")
     date_range = st.selectbox(
         "Time Range",
@@ -387,34 +187,21 @@ with st.sidebar:
          "Last 12 months", "All time"],
         index=2
     )
-
-    available_types = ["All"] + sorted(
-        df_all["training_type"].dropna().unique().tolist()
-    )
-    type_filter = st.multiselect(
-        "Training Types", available_types, default=["All"]
-    )
-
+    available_types = ["All"] + sorted(df_all["training_type"].dropna().unique().tolist())
+    type_filter = st.multiselect("Training Types", available_types, default=["All"])
     st.markdown("---")
     st.markdown(f"**Last updated:** {datetime.now().strftime('%d %b %Y %H:%M')}")
     st.markdown(f"**Total sessions:** {len(df_all)}")
-    st.markdown(
-        f"**Date range:** {df_all['date'].min().date()} → {df_all['date'].max().date()}"
-    )
+    st.markdown(f"**Date range:** {df_all['date'].min().date()} → {df_all['date'].max().date()}")
 
-# ── Filter ────────────────────────────────────────────────────────────────────
 days_map = {
-    "Last 30 days": 30, "Last 90 days": 90,
-    "Last 6 months": 180, "Last 12 months": 365, "All time": 9999
+    "Last 30 days": 30, "Last 90 days": 90, "Last 6 months": 180,
+    "Last 12 months": 365, "All time": 9999
 }
-cutoff = datetime.now() - timedelta(days=days_map[date_range])
-df = df_all[df_all["date"] >= cutoff].copy()
+cutoff      = datetime.now() - timedelta(days=days_map[date_range])
+df          = df_all[df_all["date"] >= cutoff].copy()
 df_main_all = df_all[df_all["training_type"].isin(MAIN_TYPES)].copy()
 df_main     = df[df["training_type"].isin(MAIN_TYPES)].copy()
-
-# Fixed 12-month window for trend charts that should always read "recent".
-_12m_cut = pd.Timestamp.now() - timedelta(days=365)
-df_12m   = df_all[df_all["date"] >= _12m_cut].copy()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -428,39 +215,41 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## 📅 This Week vs Last Week")
 
-now          = pd.Timestamp.now()
-week_start   = now - timedelta(days=now.weekday())
-last_week_s  = week_start - timedelta(days=7)
+now         = pd.Timestamp.now()
+week_start  = now - timedelta(days=now.weekday())
+last_week_s = week_start - timedelta(days=7)
+this_week   = df_all[df_all["date"] >= week_start]
+last_week   = df_all[(df_all["date"] >= last_week_s) & (df_all["date"] < week_start)]
 
-this_week = df_all[df_all["date"] >= week_start]
-last_week = df_all[(df_all["date"] >= last_week_s) & (df_all["date"] < week_start)]
+def safe_sum(s):
+    return pd.to_numeric(s, errors="coerce").sum()
 
-def safe_mean(series):
-    v = pd.to_numeric(series, errors="coerce").dropna()
+def safe_mean(s):
+    v = pd.to_numeric(s, errors="coerce").dropna()
     return v.mean() if len(v) > 0 else 0
 
-tw_tss  = pd.to_numeric(this_week["tss"], errors="coerce").sum()
-lw_tss  = pd.to_numeric(last_week["tss"], errors="coerce").sum()
-tw_sess = len(this_week)
-lw_sess = len(last_week)
+tw_tss  = safe_sum(this_week["tss"])
+lw_tss  = safe_sum(last_week["tss"])
+tw_elev = safe_sum(this_week["elevation"])
+lw_elev = safe_sum(last_week["elevation"])
 tw_if   = safe_mean(this_week["if_score"])
 lw_if   = safe_mean(last_week["if_score"])
 tw_pwr  = safe_mean(this_week["power_avg"])
 lw_pwr  = safe_mean(last_week["power_avg"])
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric("Weekly TSS", f"{tw_tss:.0f}",
-              delta=f"{tw_tss - lw_tss:+.0f} vs last week")
+    st.metric("Weekly TSS", f"{tw_tss:.0f}", delta=f"{tw_tss - lw_tss:+.0f} vs last week")
 with col2:
-    st.metric("Sessions", f"{tw_sess}",
-              delta=f"{tw_sess - lw_sess:+d} vs last week")
+    st.metric("Sessions", f"{len(this_week)}", delta=f"{len(this_week)-len(last_week):+d} vs last week")
 with col3:
     st.metric("Avg IF", f"{tw_if:.3f}" if tw_if > 0 else "—",
-              delta=f"{tw_if - lw_if:+.3f}" if tw_if > 0 and lw_if > 0 else None)
+              delta=f"{tw_if-lw_if:+.3f}" if tw_if > 0 and lw_if > 0 else None)
 with col4:
     st.metric("Avg Power", f"{tw_pwr:.0f}W" if tw_pwr > 0 else "—",
-              delta=f"{tw_pwr - lw_pwr:+.0f}W" if tw_pwr > 0 and lw_pwr > 0 else None)
+              delta=f"{tw_pwr-lw_pwr:+.0f}W" if tw_pwr > 0 and lw_pwr > 0 else None)
+with col5:
+    st.metric("Elevation", f"{tw_elev:.0f}m", delta=f"{tw_elev-lw_elev:+.0f}m vs last week")
 
 st.markdown("---")
 
@@ -493,13 +282,13 @@ with col4:
         if len(eftp_s) > 0:
             ev = eftp_s.iloc[-1]
             ep = eftp_s.iloc[-2] if len(eftp_s) > 1 else ev
-            st.metric("eFTP", f"{ev:.0f}W", delta=f"{ev - ep:+.0f}W")
+            st.metric("eFTP", f"{ev:.0f}W", delta=f"{ev-ep:+.0f}W")
         else:
             st.metric("eFTP", "—")
     else:
         st.metric("eFTP", "—")
 with col5:
-    wkg_s   = pd.to_numeric(df_all["w_per_kg"], errors="coerce").dropna()
+    wkg_s   = df_all["w_per_kg"].dropna()
     wkg_val = wkg_s.tail(10).mean() if len(wkg_s) >= 10 else wkg_s.mean()
     st.metric("W/kg (10-session avg)", f"{wkg_val:.2f}")
 
@@ -509,167 +298,218 @@ st.markdown(
     f'Current State: {state}</div>',
     unsafe_allow_html=True
 )
-
 state_guide = {
-    "Undertrained":       "⚠️ Build baseline volume — CTL too low",
-    "Overreached":        "🚨 Rest immediately — TSB below -30",
-    "Deep Block":         "💪 Hard training block — monitor recovery closely",
-    "Build Phase":        "✅ Most productive training zone — keep pushing",
-    "Neutral":            "⚖️ Balanced load — maintain or start taper",
-    "Fresh":              "🟢 Race-ready window — quality sessions now",
-    "Peak/Detrain Risk":  "⚡ Peak form — race or start next block",
+    "Undertrained":      "⚠️ Build baseline volume — CTL too low",
+    "Overreached":       "🚨 Rest immediately — TSB below -30",
+    "Deep Block":        "💪 Hard training block — monitor recovery closely",
+    "Build Phase":       "✅ Most productive training zone — keep pushing",
+    "Neutral":           "⚖️ Balanced load — maintain or start taper",
+    "Fresh":             "🟢 Race-ready window — quality sessions now",
+    "Peak/Detrain Risk": "⚡ Peak form — race or start next block",
 }
 st.info(state_guide.get(state, ""))
-
-if "icu_ctl" in df_all.columns and "icu_atl" in df_all.columns:
-    _icu_f = pd.to_numeric(df_all["icu_ctl"], errors="coerce").dropna()
-    _icu_a = pd.to_numeric(df_all["icu_atl"], errors="coerce").dropna()
-    if len(_icu_f) > 0 and len(_icu_a) > 0:
-        st.caption(
-            f"Intervals.icu (last synced activity): "
-            f"Fitness {_icu_f.iloc[-1]:.0f} · Fatigue {_icu_a.iloc[-1]:.0f} · "
-            f"Form {_icu_f.iloc[-1] - _icu_a.iloc[-1]:+.0f}"
-        )
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FTP STIMULUS — THE KEY CHART
+# OBJECTIVE FATIGUE SIGNALS
+# (replaces RPE — power/HR ratio is more reliable for this athlete)
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🎯 FTP Development Analysis")
-st.caption("Is your training mix actually driving FTP up?")
+st.markdown("## 🔬 Objective Fatigue Signals")
+st.caption(
+    "Power/HR efficiency is more reliable than RPE for you — "
+    "your perception is contaminated by heat, sleep and motivation. "
+    "These metrics are not."
+)
+
+recent_eff = df_all[df_all["efficiency"].notna()].tail(60).copy()
+
+col1, col2, col3 = st.columns(3)
+
+# Current efficiency vs 28d average
+curr_eff    = recent_eff["efficiency"].iloc[-1] if len(recent_eff) > 0 else np.nan
+avg_eff_28d = recent_eff["eff_28d"].iloc[-1]   if len(recent_eff) > 0 else np.nan
+eff_delta   = ((curr_eff - avg_eff_28d) / avg_eff_28d * 100) if avg_eff_28d else np.nan
+
+with col1:
+    color = C["green"] if eff_delta and eff_delta > 0 else C["red"] if eff_delta and eff_delta < -5 else C["yellow"]
+    st.metric(
+        "W/BPM vs 28d avg",
+        f"{curr_eff:.2f}" if not np.isnan(curr_eff) else "—",
+        delta=f"{eff_delta:+.1f}%" if eff_delta and not np.isnan(eff_delta) else None
+    )
+
+# Norwegian compliance this week
+quality_this_week = this_week[this_week["if_score"] >= 0.85]
+z3_drift_week     = this_week[(this_week["if_score"] >= 0.75) & (this_week["if_score"] < 0.85)]
+
+with col2:
+    norwegian_ok = len(quality_this_week)
+    st.metric(
+        "True Threshold Sessions",
+        f"{norwegian_ok} / {len(this_week)}",
+        delta="✅ Norwegian target" if norwegian_ok >= 2 else "⚠️ Need 2 quality sessions"
+    )
+
+with col3:
+    z3_count = len(z3_drift_week)
+    st.metric(
+        "Z3 Drift Sessions (avoid)",
+        f"{z3_count}",
+        delta="✅ Clean" if z3_count == 0 else f"⚠️ {z3_count} sessions in grey zone"
+    )
+
+# Efficiency trend chart with heat annotation
+fig_eff_trend = go.Figure()
+
+# 28d rolling average band
+fig_eff_trend.add_trace(go.Scatter(
+    x=recent_eff["date"], y=recent_eff["eff_28d"],
+    mode="lines", name="28d Rolling Avg",
+    line=dict(color=C["accent"], width=2, dash="dash"),
+    opacity=0.7
+))
+
+# Upper/lower bounds (±5%)
+fig_eff_trend.add_trace(go.Scatter(
+    x=recent_eff["date"],
+    y=recent_eff["eff_28d"] * 1.05,
+    mode="lines", line=dict(width=0),
+    showlegend=False, hoverinfo="skip"
+))
+fig_eff_trend.add_trace(go.Scatter(
+    x=recent_eff["date"],
+    y=recent_eff["eff_28d"] * 0.95,
+    mode="lines", line=dict(width=0),
+    fill="tonexty", fillcolor="rgba(88,166,255,0.08)",
+    name="±5% normal range", hoverinfo="skip"
+))
+
+# Session dots coloured by efficiency vs baseline
+dot_colors = []
+for _, row in recent_eff.iterrows():
+    if pd.isna(row["efficiency"]) or pd.isna(row["eff_28d"]):
+        dot_colors.append(C["muted"])
+    elif row["efficiency"] >= row["eff_28d"] * 1.05:
+        dot_colors.append(C["green"])
+    elif row["efficiency"] <= row["eff_28d"] * 0.95:
+        dot_colors.append(C["red"])
+    else:
+        dot_colors.append(C["yellow"])
+
+fig_eff_trend.add_trace(go.Scatter(
+    x=recent_eff["date"],
+    y=recent_eff["efficiency"],
+    mode="markers",
+    name="Session W/BPM",
+    marker=dict(color=dot_colors, size=8, opacity=0.85),
+    text=[
+        f"{row['date'].strftime('%d %b')}<br>"
+        f"W/BPM: {row['efficiency']:.2f}<br>"
+        f"Baseline: {row['eff_28d']:.2f}<br>"
+        f"Temp: {row['temp_avg']:.0f}°C" if not pd.isna(row.get('temp_avg', np.nan)) else
+        f"{row['date'].strftime('%d %b')}<br>W/BPM: {row['efficiency']:.2f}"
+        for _, row in recent_eff.iterrows()
+    ],
+    hoverinfo="text"
+))
+
+# Mark hot sessions
+hot = recent_eff[recent_eff["is_hot_session"] == True]
+if len(hot) > 0:
+    fig_eff_trend.add_trace(go.Scatter(
+        x=hot["date"], y=hot["efficiency"],
+        mode="markers", name=f"Hot session (>{HOT_TEMP}°C)",
+        marker=dict(color=C["orange"], size=14, symbol="circle-open", line=dict(width=2)),
+        hoverinfo="skip"
+    ))
+
+fig_eff_trend.update_layout(
+    title="Cardiac Efficiency (W/BPM) — Objective Fatigue Tracker<br>"
+          "<sup>🟢 Above baseline = adapting · 🔴 Below baseline = fatigued · 🟠 Circle = hot session</sup>",
+    height=420, **PLOTLY_LAYOUT
+)
+st.plotly_chart(fig_eff_trend, use_container_width=True)
+
+# Fatigue alert
+if eff_delta and not np.isnan(eff_delta):
+    if eff_delta < -5:
+        st.markdown(
+            f'<div class="alert-box" style="background:{C["red"]}22; '
+            f'border:1px solid {C["red"]}; color:{C["text"]};">'
+            f'🚨 <b>Fatigue Alert:</b> W/BPM is {abs(eff_delta):.1f}% below your 28-day baseline. '
+            f'Reduce intensity this week regardless of how you feel subjectively.</div>',
+            unsafe_allow_html=True
+        )
+    elif eff_delta > 5:
+        st.markdown(
+            f'<div class="alert-box" style="background:{C["green"]}22; '
+            f'border:1px solid {C["green"]}; color:{C["text"]};">'
+            f'✅ <b>Adaptation signal:</b> W/BPM is {eff_delta:.1f}% above your 28-day baseline. '
+            f'Your body is responding well — this is a good week to push quality.</div>',
+            unsafe_allow_html=True
+        )
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NORWEGIAN METHOD COMPLIANCE
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🇳🇴 Norwegian Method Compliance")
+st.caption(
+    "Double threshold: 2 sessions/week at true threshold (IF ≥ 0.85). "
+    "Avoid Z3 drift (IF 0.75-0.85). Keep Z2 pure (IF < 0.75). No VO2max unless specifically planned."
+)
+
+# Weekly compliance over time
+weekly_compliance = (
+    df.groupby(pd.Grouper(key="date", freq="W"))
+    .apply(lambda x: pd.Series({
+        "quality_sessions": (x["if_score"] >= 0.85).sum(),
+        "z3_drift":         ((x["if_score"] >= 0.75) & (x["if_score"] < 0.85)).sum(),
+        "pure_z2":          (x["if_score"] < 0.75).sum(),
+        "total":            len(x),
+    }))
+    .reset_index()
+)
 
 col1, col2 = st.columns(2)
 
 with col1:
-    # FTP Stimulus Score by training type — filtered period
-    if len(df_main) > 0:
-        stim = (
-            df_main.groupby("training_type")["ftp_stimulus"]
-            .mean()
-            .reset_index()
-            .sort_values("ftp_stimulus", ascending=True)
-        )
-        stim["is_driver"] = stim["training_type"].isin(FTP_DRIVERS)
-        bar_colors = [C["green"] if d else C["muted"] for d in stim["is_driver"]]
-
-        fig_stim = go.Figure()
-        fig_stim.add_trace(go.Bar(
-            x=stim["ftp_stimulus"],
-            y=stim["training_type"],
-            orientation="h",
-            marker_color=bar_colors,
-            opacity=0.85,
-            text=[f"{v:.1f}" for v in stim["ftp_stimulus"]],
-            textposition="outside",
-        ))
-        fig_stim.update_layout(
-            title=f"FTP Stimulus Score — {date_range}<br>"
-                  f"<sup>IF² × Duration × 100 | Green = FTP driver types</sup>",
-            height=420, **PLOTLY_LAYOUT
-        )
-        st.plotly_chart(fig_stim, use_container_width=True)
-    else:
-        st.info("No labelled training type data in this period.")
+    fig_norw = go.Figure()
+    fig_norw.add_trace(go.Bar(
+        x=weekly_compliance["date"], y=weekly_compliance["quality_sessions"],
+        name="True Threshold (IF≥0.85)", marker_color=C["green"], opacity=0.85))
+    fig_norw.add_trace(go.Bar(
+        x=weekly_compliance["date"], y=weekly_compliance["z3_drift"],
+        name="Z3 Drift — avoid (IF 0.75-0.85)", marker_color=C["orange"], opacity=0.85))
+    fig_norw.add_hline(y=2, line_dash="dot", line_color=C["green"],
+                        annotation_text="Norwegian target (2 sessions)")
+    fig_norw.update_layout(
+        barmode="stack",
+        title="Weekly Session Quality Distribution",
+        height=350, **PLOTLY_LAYOUT
+    )
+    st.plotly_chart(fig_norw, use_container_width=True)
 
 with col2:
-    # FTP driver % of total sessions — pie chart
-    if len(df_main) > 0:
-        driver_count = df_main["training_type"].isin(FTP_DRIVERS).sum()
-        base_count   = len(df_main) - driver_count
-        driver_tss   = df_main.loc[df_main["training_type"].isin(FTP_DRIVERS), "tss"]
-        base_tss     = df_main.loc[~df_main["training_type"].isin(FTP_DRIVERS), "tss"]
-
-        fig_pie = go.Figure()
-        fig_pie.add_trace(go.Pie(
-            labels=["FTP Drivers (FTP/SST/TEMPO/VO2)", "Base Volume (END/Z2/FATMAX)"],
-            values=[
-                pd.to_numeric(driver_tss, errors="coerce").sum(),
-                pd.to_numeric(base_tss, errors="coerce").sum()
-            ],
-            marker_colors=[C["green"], C["muted"]],
-            hole=0.5,
-            textinfo="label+percent",
-            textfont=dict(size=11),
-        ))
-        fig_pie.update_layout(
-            title="TSS Split — Quality vs Base Volume",
-            height=420,
-            paper_bgcolor=C["bg"],
-            font=dict(color=C["text"]),
-            legend=dict(bgcolor=C["panel"]),
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-        # Insight text
-        total_main = len(df_main)
-        driver_pct = driver_count / total_main * 100 if total_main > 0 else 0
-        if driver_pct < 25:
-            insight_color = C["orange"]
-            insight = (
-                f"⚠️ Only {driver_pct:.0f}% of sessions are FTP drivers. "
-                "You need more FTP/SST/TEMPO work to push threshold up."
-            )
-        elif driver_pct < 40:
-            insight_color = C["yellow"]
-            insight = (
-                f"✅ {driver_pct:.0f}% FTP driver sessions — good balance. "
-                "2 quality sessions per week is the target."
-            )
-        else:
-            insight_color = C["green"]
-            insight = (
-                f"🔥 {driver_pct:.0f}% FTP driver sessions — high intensity block. "
-                "Monitor recovery — don't skip base volume."
-            )
-        st.markdown(
-            f'<div style="background:{insight_color}22; border:1px solid {insight_color}; '
-            f'border-radius:8px; padding:12px; margin-top:8px; color:{C["text"]};">'
-            f'{insight}</div>',
-            unsafe_allow_html=True
-        )
-
-# FTP Stimulus trend over time
-if len(df_main) > 0:
-    weekly_stim = (
-        df_main.groupby(pd.Grouper(key="date", freq="W"))
-        .agg(
-            total_stimulus=("ftp_stimulus", "sum"),
-            driver_stimulus=("ftp_stimulus", lambda x: x[
-                df_main.loc[x.index, "training_type"].isin(FTP_DRIVERS)
-            ].sum()),
-            sessions=("tss", "count"),
-        )
-        .reset_index()
+    # IF distribution histogram
+    if_data = df[df["if_score"].notna() & (df["if_score"] > 0.3)]
+    fig_if_hist = go.Figure()
+    fig_if_hist.add_trace(go.Histogram(
+        x=if_data["if_score"], nbinsx=30,
+        marker_color=C["accent"], opacity=0.75, name="Sessions"))
+    fig_if_hist.add_vline(x=0.75, line_dash="dash", line_color=C["yellow"],
+                           annotation_text="Z2/Z3 boundary (0.75)")
+    fig_if_hist.add_vline(x=0.85, line_dash="dash", line_color=C["green"],
+                           annotation_text="Threshold start (0.85)")
+    fig_if_hist.add_vline(x=0.95, line_dash="dash", line_color=C["red"],
+                           annotation_text="VO2max (0.95)")
+    fig_if_hist.update_layout(
+        title=f"IF Distribution — {date_range}<br>"
+              f"<sup>Ideal: big spike at <0.75 (Z2) + smaller spike at 0.85-0.95 (threshold)</sup>",
+        height=350, **PLOTLY_LAYOUT
     )
-
-    fig_trend = go.Figure()
-    fig_trend.add_trace(go.Bar(
-        x=weekly_stim["date"],
-        y=weekly_stim["total_stimulus"],
-        name="Total FTP Stimulus",
-        marker_color=C["muted"],
-        opacity=0.5,
-    ))
-    fig_trend.add_trace(go.Bar(
-        x=weekly_stim["date"],
-        y=weekly_stim["driver_stimulus"],
-        name="FTP Driver Sessions Only",
-        marker_color=C["green"],
-        opacity=0.85,
-    ))
-    fig_trend.add_trace(go.Scatter(
-        x=weekly_stim["date"],
-        y=weekly_stim["total_stimulus"].rolling(4).mean(),
-        name="4-week trend",
-        line=dict(color=C["accent"], width=2.5),
-        mode="lines",
-    ))
-    fig_trend.update_layout(
-        barmode="overlay",
-        title="Weekly FTP Stimulus Trend — Are quality sessions increasing?",
-        height=320, **PLOTLY_LAYOUT
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
+    st.plotly_chart(fig_if_hist, use_container_width=True)
 
 st.markdown("---")
 
@@ -679,797 +519,407 @@ st.markdown("---")
 st.markdown("## 📈 Performance Management Chart")
 
 fig_pmc = make_subplots(
-    rows=3, cols=1,
-    shared_xaxes=True,
+    rows=3, cols=1, shared_xaxes=True,
     row_heights=[0.4, 0.35, 0.25],
-    subplot_titles=[
-        "CTL vs ATL (Fitness vs Fatigue)",
-        "TSB — Form / Freshness",
-        "Weekly TSS"
-    ]
+    subplot_titles=["CTL vs ATL (Fitness vs Fatigue)",
+                    "TSB — Form / Freshness", "Weekly TSS"]
 )
-
-fig_pmc.add_trace(go.Scatter(
-    x=df["date"], y=df["ctl"], name="CTL Fitness",
-    line=dict(color=C["green"], width=2.5)
-), row=1, col=1)
-
-fig_pmc.add_trace(go.Scatter(
-    x=df["date"], y=df["atl"], name="ATL Fatigue",
+fig_pmc.add_trace(go.Scatter(x=df["date"], y=df["ctl"], name="CTL Fitness",
+    line=dict(color=C["green"], width=2.5)), row=1, col=1)
+fig_pmc.add_trace(go.Scatter(x=df["date"], y=df["atl"], name="ATL Fatigue",
     line=dict(color=C["orange"], width=2.5),
-    fill="tonexty", fillcolor="rgba(240,136,62,0.1)"
-), row=1, col=1)
-
-for state_name, color in STATE_COLORS.items():
-    mask = df["fatigue_state"] == state_name
+    fill="tonexty", fillcolor="rgba(240,136,62,0.1)"), row=1, col=1)
+for sname, color in STATE_COLORS.items():
+    mask = df["fatigue_state"] == sname
     if mask.sum() > 0:
         fig_pmc.add_trace(go.Scatter(
-            x=df.loc[mask, "date"],
-            y=df.loc[mask, "tsb"],
-            mode="markers",
-            name=state_name,
-            marker=dict(color=color, size=5, opacity=0.7),
-        ), row=2, col=1)
-
+            x=df.loc[mask, "date"], y=df.loc[mask, "tsb"],
+            mode="markers", name=sname,
+            marker=dict(color=color, size=5, opacity=0.7)), row=2, col=1)
 fig_pmc.add_hline(y=-30, line_dash="dash", line_color=C["red"],
                    annotation_text="-30 Overreach", row=2, col=1)
 fig_pmc.add_hline(y=25, line_dash="dash", line_color=C["purple"],
                    annotation_text="+25 Peak", row=2, col=1)
 fig_pmc.add_hline(y=0, line_dash="dot", line_color=C["muted"], row=2, col=1)
-
-weekly = df.resample("W", on="date")["tss"].sum().reset_index()
-bar_colors_pmc = [
-    C["red"] if t >= 700 else C["green"] if t >= 400 else C["yellow"]
-    for t in weekly["tss"]
-]
+weekly_tss = df.resample("W", on="date")["tss"].sum().reset_index()
 fig_pmc.add_trace(go.Bar(
-    x=weekly["date"], y=weekly["tss"],
-    marker_color=bar_colors_pmc, name="Weekly TSS", opacity=0.75
-), row=3, col=1)
-
-fig_pmc.update_layout(
-    height=750, showlegend=True,
+    x=weekly_tss["date"], y=weekly_tss["tss"],
+    marker_color=[C["red"] if t >= 700 else C["green"] if t >= 400 else C["yellow"]
+                  for t in weekly_tss["tss"]],
+    name="Weekly TSS", opacity=0.75), row=3, col=1)
+fig_pmc.update_layout(height=750, showlegend=True,
     paper_bgcolor=C["bg"], plot_bgcolor=C["panel"],
     font=dict(color=C["text"]),
-    legend=dict(bgcolor=C["panel"], bordercolor=C["grid"]),
-)
+    legend=dict(bgcolor=C["panel"], bordercolor=C["grid"]))
 for i in range(1, 4):
     fig_pmc.update_xaxes(gridcolor=C["grid"], row=i, col=1)
     fig_pmc.update_yaxes(gridcolor=C["grid"], row=i, col=1)
-
 st.plotly_chart(fig_pmc, use_container_width=True)
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TIME IN POWER ZONES — from Intervals.icu per-second data
+# FTP DEVELOPMENT
 # ══════════════════════════════════════════════════════════════════════════════
-ZONE_COLS   = [f"z{i}_secs" for i in range(1, 8)]
-ZONE_NAMES  = ["Z1 Recovery", "Z2 Endurance", "Z3 Tempo", "Z4 Threshold",
-               "Z5 VO2max", "Z6 Anaerobic", "Z7 Neuromuscular"]
-ZONE_COLORS = [C["muted"], C["accent"], C["yellow"], C["orange"],
-               C["red"], C["purple"], "#e6edf3"]
-
-zone_cols_present = [c for c in ZONE_COLS if c in df.columns]
-if len(zone_cols_present) >= 5:
-    zone_df = df[["date"] + zone_cols_present].copy()
-    for zc in zone_cols_present:
-        zone_df[zc] = pd.to_numeric(zone_df[zc], errors="coerce").fillna(0)
-
-    if zone_df[zone_cols_present].sum().sum() > 0:
-        st.markdown("## 🌈 Time in Power Zones")
-        st.caption(f"Source: Intervals.icu zone data · {date_range}")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            totals_h = zone_df[zone_cols_present].sum() / 3600.0
-            fig_tz = go.Figure()
-            fig_tz.add_trace(go.Bar(
-                x=totals_h.values,
-                y=[ZONE_NAMES[ZONE_COLS.index(c)] for c in zone_cols_present],
-                orientation="h",
-                marker_color=[ZONE_COLORS[ZONE_COLS.index(c)]
-                              for c in zone_cols_present],
-                text=[f"{v:.1f}h" for v in totals_h.values],
-                textposition="outside",
-            ))
-            fig_tz.update_layout(title="Total Hours per Zone",
-                                 height=380, **PLOTLY_LAYOUT)
-            st.plotly_chart(fig_tz, use_container_width=True)
-
-        with col2:
-            weekly_z = (zone_df.resample("W", on="date")[zone_cols_present]
-                        .sum() / 3600.0)
-            fig_wz = go.Figure()
-            for zc in zone_cols_present:
-                fig_wz.add_trace(go.Bar(
-                    x=weekly_z.index, y=weekly_z[zc],
-                    name=ZONE_NAMES[ZONE_COLS.index(zc)],
-                    marker_color=ZONE_COLORS[ZONE_COLS.index(zc)],
-                ))
-            fig_wz.update_layout(barmode="stack",
-                                 title="Weekly Hours per Zone",
-                                 height=380, **PLOTLY_LAYOUT)
-            st.plotly_chart(fig_wz, use_container_width=True)
-
-        total_secs = zone_df[zone_cols_present].sum().sum()
-        low_cols = [c for c in ["z1_secs", "z2_secs"] if c in zone_cols_present]
-        hi_cols  = [c for c in ["z4_secs", "z5_secs", "z6_secs", "z7_secs"]
-                    if c in zone_cols_present]
-        low_pct = zone_df[low_cols].sum().sum() / total_secs * 100
-        hi_pct  = zone_df[hi_cols].sum().sum() / total_secs * 100
-        st.markdown(
-            f'<div style="background:{C["accent"]}22; border:1px solid '
-            f'{C["accent"]}; border-radius:8px; padding:12px; '
-            f'color:{C["text"]};">'
-            f'⚖️ Intensity distribution: <b>{low_pct:.0f}%</b> low (Z1–Z2) · '
-            f'<b>{100 - low_pct - hi_pct:.0f}%</b> tempo (Z3) · '
-            f'<b>{hi_pct:.0f}%</b> high (Z4+). '
-            f'Pyramidal reference for a climber: ~75–85% low.</div>',
-            unsafe_allow_html=True
-        )
-        st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# POWER & EFFICIENCY
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## ⚡ Power & Efficiency")
+st.markdown("## 🎯 FTP Development Analysis")
+st.caption("Is your training mix actually driving FTP up?")
 
 col1, col2 = st.columns(2)
-
 with col1:
-    monthly = df.resample("MS", on="date").agg(
-        avg_wkg=("w_per_kg", "mean"),
-        max_wkg=("w_per_kg", "max"),
-    ).reset_index()
+    if len(df_main) > 0:
+        stim = (df_main.groupby("training_type")["ftp_stimulus"]
+                .mean().reset_index().sort_values("ftp_stimulus", ascending=True))
+        stim["is_driver"] = stim["training_type"].isin(FTP_DRIVERS)
+        fig_stim = go.Figure()
+        fig_stim.add_trace(go.Bar(
+            x=stim["ftp_stimulus"], y=stim["training_type"], orientation="h",
+            marker_color=[C["green"] if d else C["muted"] for d in stim["is_driver"]],
+            opacity=0.85, text=[f"{v:.1f}" for v in stim["ftp_stimulus"]],
+            textposition="outside"))
+        fig_stim.update_layout(
+            title=f"FTP Stimulus Score — {date_range}",
+            height=420, **PLOTLY_LAYOUT)
+        st.plotly_chart(fig_stim, use_container_width=True)
+    else:
+        st.info("No labelled training type data in this period.")
 
+with col2:
+    if len(df_main) > 0:
+        driver_tss = df_main.loc[df_main["training_type"].isin(FTP_DRIVERS), "tss"].sum()
+        base_tss   = df_main.loc[~df_main["training_type"].isin(FTP_DRIVERS), "tss"].sum()
+        fig_pie = go.Figure()
+        fig_pie.add_trace(go.Pie(
+            labels=["FTP Drivers", "Base Volume"],
+            values=[driver_tss, base_tss],
+            marker_colors=[C["green"], C["muted"]],
+            hole=0.5, textinfo="label+percent"))
+        fig_pie.update_layout(title="TSS Split — Quality vs Base Volume",
+            height=420, paper_bgcolor=C["bg"],
+            font=dict(color=C["text"]), legend=dict(bgcolor=C["panel"]))
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POWER CURVE
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## ⚡ Power Curve & Best Efforts")
+
+col1, col2 = st.columns(2)
+with col1:
+    power_data = df_all[df_all["power_avg"] > 0].copy()
+    durations_label = ["5s sprint", "1 min", "5 min", "10 min", "20 min", "30 min", "60 min"]
+    durations_h     = [1/720, 1/60, 5/60, 10/60, 20/60, 30/60, 1.0]
+    best_efforts = []
+    for dur_h, label in zip(durations_h, durations_label):
+        tol = dur_h * 0.3
+        sub = power_data[(power_data["duration_h"] >= dur_h - tol) &
+                         (power_data["duration_h"] <= dur_h + tol)]
+        if len(sub) > 0:
+            bw = sub["power_np"].max() if "power_np" in sub.columns else sub["power_avg"].max()
+        elif label == "5s sprint" and "power_max" in power_data.columns:
+            bw = power_data["power_max"].max()
+        else:
+            cl = power_data.iloc[(power_data["duration_h"] - dur_h).abs().argsort()[:10]]
+            bw = cl["power_np"].max() if "power_np" in cl.columns else cl["power_avg"].max()
+        best_efforts.append({"duration": label, "watts": bw, "wkg": bw / 57.0})
+    pc_df = pd.DataFrame(best_efforts).dropna()
+    fig_pc = go.Figure()
+    fig_pc.add_trace(go.Scatter(
+        x=pc_df["duration"], y=pc_df["watts"],
+        mode="lines+markers+text",
+        line=dict(color=C["purple"], width=3),
+        marker=dict(size=10, color=C["purple"]),
+        text=[f"{w:.0f}W" for w in pc_df["watts"]],
+        textposition="top center", name="Best Power (W)"))
+    fig_pc.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
+                      annotation_text="Current FTP (235W)")
+    fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"],
+                      annotation_text="Target FTP (275W)", opacity=0.4)
+    fig_pc.update_layout(title="Power Curve — Best Sustained Watts",
+        height=380, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_pc, use_container_width=True)
+
+with col2:
+    fig_wkg_curve = go.Figure()
+    fig_wkg_curve.add_trace(go.Bar(
+        x=pc_df["duration"], y=pc_df["wkg"],
+        marker_color=[C["red"] if w >= 5.0 else C["orange"] if w >= 4.0
+                      else C["yellow"] if w >= 3.5 else C["accent"]
+                      for w in pc_df["wkg"]],
+        text=[f"{w:.2f}" for w in pc_df["wkg"]],
+        textposition="outside", opacity=0.85))
+    fig_wkg_curve.add_hline(y=4.12, line_dash="dot", line_color=C["yellow"],
+                              annotation_text="Current FTP (4.12 W/kg)")
+    fig_wkg_curve.add_hline(y=4.82, line_dash="dot", line_color=C["green"],
+                              annotation_text="Target (4.82 W/kg)", opacity=0.4)
+    fig_wkg_curve.update_layout(title="W/kg at Each Duration — 57kg Climber",
+        height=380, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_wkg_curve, use_container_width=True)
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FTP PROGRESSION MONTH BY MONTH
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 📈 FTP Progression — Month by Month")
+
+col1, col2 = st.columns(2)
+with col1:
+    monthly_ftp = (
+        df_all[df_all["power_np"].notna() & (df_all["duration_h"] > 0.75)]
+        .groupby(df_all["date"].dt.to_period("M"))
+        .agg(best_np=("power_np", "max"), sessions=("tss", "count"))
+        .reset_index()
+    )
+    monthly_ftp["month_dt"] = monthly_ftp["date"].apply(lambda p: p.start_time)
+    monthly_ftp["ftp_est"]  = monthly_ftp["best_np"] * 0.95
+    fig_ftp_prog = go.Figure()
+    fig_ftp_prog.add_trace(go.Scatter(
+        x=monthly_ftp["month_dt"], y=monthly_ftp["ftp_est"],
+        mode="lines+markers", name="Est. FTP (best NP × 0.95)",
+        line=dict(color=C["purple"], width=2.5), marker=dict(size=5),
+        fill="tozeroy", fillcolor="rgba(188,140,255,0.08)"))
+    fig_ftp_prog.add_trace(go.Scatter(
+        x=monthly_ftp["month_dt"],
+        y=monthly_ftp["ftp_est"].rolling(3).mean(),
+        mode="lines", name="3-month trend",
+        line=dict(color=C["accent"], width=2, dash="dash")))
+    fig_ftp_prog.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
+                            line_color=C["red"], opacity=0.7,
+                            annotation_text="Surgery Jun 2025")
+    fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
+                            annotation_text="Current FTP (235W)")
+    fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"],
+                            annotation_text="Pre-accident FTP (275W)", opacity=0.4)
+    fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
+        height=400, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_ftp_prog, use_container_width=True)
+
+with col2:
+    annual_ftp = (
+        df_all[df_all["power_np"].notna() & (df_all["duration_h"] > 0.75)]
+        .groupby("year")
+        .agg(peak_ftp=("power_np", lambda x: x.max() * 0.95),
+             avg_wkg=("w_per_kg", "mean"))
+        .reset_index()
+    )
+    fig_annual = go.Figure()
+    fig_annual.add_trace(go.Bar(
+        x=annual_ftp["year"].astype(str), y=annual_ftp["peak_ftp"],
+        marker_color=[C["red"] if y == 2025 else C["purple"] for y in annual_ftp["year"]],
+        opacity=0.85, text=[f"{v:.0f}W" for v in annual_ftp["peak_ftp"]],
+        textposition="outside", name="Peak FTP estimate"))
+    fig_annual.update_layout(
+        title="Peak Estimated FTP by Year<br><sup>Red = surgery year</sup>",
+        height=400, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_annual, use_container_width=True)
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ELEVATION
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🏔️ Elevation — Climber Stats")
+st.caption("57kg climber — elevation per week is your key volume metric")
+
+total_elev  = df_all["elevation"].sum()
+avg_wk_elev = total_elev / max((df_all["date"].max()-df_all["date"].min()).days/7, 1)
+best_elev   = df_all["elevation"].max()
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Total Career Elevation", f"{total_elev:,.0f}m")
+with col2:
+    st.metric("Avg Elevation / Week", f"{avg_wk_elev:,.0f}m")
+with col3:
+    st.metric("Best Single Session", f"{best_elev:,.0f}m")
+
+col1, col2 = st.columns(2)
+with col1:
+    weekly_elev = df.resample("W", on="date").agg(
+        elevation=("elevation", "sum")).reset_index()
+    weekly_elev["elevation"] = weekly_elev["elevation"].fillna(0)
+    fig_elev = go.Figure()
+    fig_elev.add_trace(go.Bar(
+        x=weekly_elev["date"], y=weekly_elev["elevation"],
+        marker_color=[C["green"] if e >= 3000 else C["yellow"] if e >= 1500 else C["muted"]
+                      for e in weekly_elev["elevation"]],
+        opacity=0.85, name="Weekly Elevation (m)"))
+    fig_elev.add_hline(y=3000, line_dash="dot", line_color=C["green"],
+                        annotation_text="3000m/week target")
+    fig_elev.add_hline(y=1500, line_dash="dot", line_color=C["yellow"],
+                        annotation_text="1500m minimum", opacity=0.5)
+    fig_elev.update_layout(title=f"Weekly Elevation — {date_range}",
+        height=350, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_elev, use_container_width=True)
+
+with col2:
+    annual_elev = df_all.groupby("year").agg(
+        total_elev=("elevation", "sum")).reset_index()
+    fig_annual_elev = go.Figure()
+    fig_annual_elev.add_trace(go.Bar(
+        x=annual_elev["year"].astype(str), y=annual_elev["total_elev"],
+        marker_color=[C["red"] if y == 2025 else C["accent"] for y in annual_elev["year"]],
+        opacity=0.85,
+        text=[f"{v/1000:.1f}K" for v in annual_elev["total_elev"]],
+        textposition="outside"))
+    fig_annual_elev.update_layout(
+        title="Total Elevation per Year<br><sup>Red = surgery year</sup>",
+        height=350, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_annual_elev, use_container_width=True)
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THIS YEAR vs SAME PERIOD LAST YEAR
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 📊 This Year vs Same Period Last Year")
+
+current_year = datetime.now().year
+today_md     = datetime.now().strftime("%m-%d")
+this_yr      = df_all[df_all["year"] == current_year]
+last_yr      = df_all[(df_all["year"] == current_year-1) &
+                       (df_all["date"].dt.strftime("%m-%d") <= today_md)]
+
+def yr_stats(d):
+    return {
+        "sessions":  len(d),
+        "total_tss": safe_sum(d["tss"]),
+        "avg_power": safe_mean(d["power_avg"]),
+        "avg_wkg":   safe_mean(d["w_per_kg"]),
+        "elevation": safe_sum(d["elevation"]),
+        "hours":     safe_sum(d["duration_h"]),
+    }
+
+ty = yr_stats(this_yr)
+ly = yr_stats(last_yr)
+
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+for col, (label, tv, lv, unit, dec) in zip(
+    [col1, col2, col3, col4, col5, col6],
+    [("Sessions", ty["sessions"], ly["sessions"], "", 0),
+     ("Total TSS", ty["total_tss"], ly["total_tss"], "", 0),
+     ("Avg Power", ty["avg_power"], ly["avg_power"], "W", 1),
+     ("Avg W/kg", ty["avg_wkg"], ly["avg_wkg"], "", 2),
+     ("Elevation", ty["elevation"], ly["elevation"], "m", 0),
+     ("Hours", ty["hours"], ly["hours"], "h", 1)]
+):
+    fmt = f"{{:.{dec}f}}{unit}"
+    with col:
+        st.metric(
+            f"{label} {current_year}",
+            fmt.format(tv) if tv and not np.isnan(float(tv)) else "—",
+            delta=f"{tv-lv:+.{dec}f}{unit} vs {current_year-1}"
+            if lv and not np.isnan(float(lv)) else None
+        )
+
+col1, col2 = st.columns(2)
+with col1:
+    mc = [{"month": pd.Timestamp(f"{current_year}-{m:02d}-01").strftime("%b"),
+           "this_year": safe_sum(df_all[(df_all["year"]==current_year) &
+                                        (df_all["date"].dt.month==m)]["tss"]),
+           "last_year": safe_sum(df_all[(df_all["year"]==current_year-1) &
+                                        (df_all["date"].dt.month==m)]["tss"])}
+          for m in range(1, 13)]
+    mc_df = pd.DataFrame(mc)
+    fig_compare = go.Figure()
+    fig_compare.add_trace(go.Bar(x=mc_df["month"], y=mc_df["last_year"],
+        name=str(current_year-1), marker_color=C["muted"], opacity=0.6))
+    fig_compare.add_trace(go.Bar(x=mc_df["month"], y=mc_df["this_year"],
+        name=str(current_year), marker_color=C["accent"], opacity=0.85))
+    fig_compare.update_layout(barmode="group",
+        title=f"Monthly TSS — {current_year} vs {current_year-1}",
+        height=350, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_compare, use_container_width=True)
+
+with col2:
+    wc = [{"month": pd.Timestamp(f"{current_year}-{m:02d}-01").strftime("%b"),
+           "this_year": safe_mean(df_all[(df_all["year"]==current_year) &
+                                          (df_all["date"].dt.month==m)]["w_per_kg"]),
+           "last_year": safe_mean(df_all[(df_all["year"]==current_year-1) &
+                                          (df_all["date"].dt.month==m)]["w_per_kg"])}
+          for m in range(1, 13)]
+    wc_df = pd.DataFrame(wc)
+    fig_wkg_c = go.Figure()
+    fig_wkg_c.add_trace(go.Scatter(x=wc_df["month"], y=wc_df["last_year"],
+        name=str(current_year-1),
+        line=dict(color=C["muted"], width=2, dash="dash"), mode="lines+markers"))
+    fig_wkg_c.add_trace(go.Scatter(x=wc_df["month"], y=wc_df["this_year"],
+        name=str(current_year),
+        line=dict(color=C["purple"], width=2.5), mode="lines+markers"))
+    fig_wkg_c.update_layout(
+        title=f"Monthly W/kg — {current_year} vs {current_year-1}",
+        height=350, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_wkg_c, use_container_width=True)
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POWER & EFFICIENCY TREND
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## ⚡ Power & Efficiency Trend")
+
+col1, col2 = st.columns(2)
+with col1:
+    monthly = df.resample("ME", on="date").agg(
+        avg_wkg=("w_per_kg", "mean"), max_wkg=("w_per_kg", "max")).reset_index()
     fig_wkg = go.Figure()
-    fig_wkg.add_trace(go.Scatter(
-        x=monthly["date"], y=monthly["avg_wkg"],
+    fig_wkg.add_trace(go.Scatter(x=monthly["date"], y=monthly["avg_wkg"],
         mode="lines+markers", name="Avg W/kg",
-        line=dict(color=C["purple"], width=2.5),
-        marker=dict(size=6)
-    ))
-    fig_wkg.add_trace(go.Scatter(
-        x=monthly["date"], y=monthly["max_wkg"],
+        line=dict(color=C["purple"], width=2.5), marker=dict(size=6)))
+    fig_wkg.add_trace(go.Scatter(x=monthly["date"], y=monthly["max_wkg"],
         mode="lines", name="Max W/kg",
-        line=dict(color=C["accent"], width=1.5, dash="dash"),
-        opacity=0.6
-    ))
-    fig_wkg.add_hline(
-        y=WKG_CURRENT, line_dash="dot", line_color=C["yellow"],
-        annotation_text=f"Current FTP ({WKG_CURRENT:.2f} W/kg = {FTP_CURRENT}W)"
-    )
-    fig_wkg.add_hline(
-        y=WKG_PRE, line_dash="dot", line_color=C["purple"],
-        annotation_text=f"Pre-accident ({WKG_PRE:.2f} W/kg = {FTP_PRE}W)",
-        opacity=0.4
-    )
-    fig_wkg.update_layout(
-        title="Monthly W/kg Trend", height=350, **PLOTLY_LAYOUT
-    )
+        line=dict(color=C["accent"], width=1.5, dash="dash"), opacity=0.6))
+    fig_wkg.add_hline(y=4.12, line_dash="dot", line_color=C["yellow"],
+                       annotation_text="Current FTP target (4.12 W/kg)")
+    fig_wkg.add_hline(y=4.82, line_dash="dot", line_color=C["purple"],
+                       annotation_text="Pre-accident target (4.82 W/kg)", opacity=0.4)
+    fig_wkg.update_layout(title="Monthly W/kg Trend", height=350, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_wkg, use_container_width=True)
 
 with col2:
-    monthly_eff = df_12m.resample("MS", on="date").agg(
-        avg_eff=("efficiency", "mean")
-    ).reset_index().dropna()
-
+    monthly_eff = df.resample("ME", on="date").agg(
+        avg_eff=("efficiency", "mean")).reset_index().dropna()
     fig_eff = go.Figure()
-    fig_eff.add_trace(go.Scatter(
-        x=monthly_eff["date"], y=monthly_eff["avg_eff"],
+    fig_eff.add_trace(go.Scatter(x=monthly_eff["date"], y=monthly_eff["avg_eff"],
         mode="lines+markers", name="W/BPM",
-        line=dict(color=C["orange"], width=2.5),
-        marker=dict(size=6),
-        fill="tozeroy", fillcolor="rgba(240,136,62,0.1)"
-    ))
+        line=dict(color=C["orange"], width=2.5), marker=dict(size=6),
+        fill="tozeroy", fillcolor="rgba(240,136,62,0.1)"))
     fig_eff.update_layout(
-        title="Cardiac Efficiency (W per BPM, last 12 months) — Higher = Better",
-        height=350, **PLOTLY_LAYOUT
-    )
+        title="Cardiac Efficiency (W per BPM) — Higher = Better",
+        height=350, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_eff, use_container_width=True)
 
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# POWER CURVE — best efforts by duration bucket
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🔋 Power Curve — Best Efforts by Duration")
-st.caption(
-    "Best and average power per session-duration bucket. Built from session "
-    "averages (one value per ride), not second-by-second peaks."
-)
-
-DUR_BINS   = [0, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 24.0]
-DUR_LABELS = ["<45min", "45–75min", "1h15–1h45", "1h45–2h30",
-              "2h30–3h30", "3h30–5h", "5h+"]
-
-
-def build_power_curve(frame):
-    d = frame.copy()
-    d["power_avg"]  = pd.to_numeric(d["power_avg"], errors="coerce")
-    d["duration_h"] = pd.to_numeric(d["duration_h"], errors="coerce")
-    d = d.dropna(subset=["power_avg", "duration_h"])
-    d = d[(d["power_avg"] > 50) & (d["duration_h"] > 0.1)]
-    if len(d) == 0:
-        return pd.DataFrame()
-    d["bucket"] = pd.cut(d["duration_h"], bins=DUR_BINS, labels=DUR_LABELS)
-    out = (
-        d.groupby("bucket", observed=False)
-        .agg(
-            best_power=("power_avg", "max"),
-            avg_power=("power_avg", "mean"),
-            best_wkg=("w_per_kg", "max"),
-            sessions=("power_avg", "count"),
-        )
-        .reset_index()
-    )
-    return out[out["sessions"] > 0]
-
-
-curve_all    = build_power_curve(df_all)
-curve_period = build_power_curve(df)
-
-if len(curve_all) > 0:
-    col1, col2 = st.columns(2)
-
-    with col1:
-        fig_curve = go.Figure()
-        fig_curve.add_trace(go.Scatter(
-            x=curve_all["bucket"].astype(str), y=curve_all["best_power"],
-            mode="lines+markers", name="All-time best",
-            line=dict(color=C["purple"], width=2.5), marker=dict(size=8),
-        ))
-        fig_curve.add_trace(go.Scatter(
-            x=curve_all["bucket"].astype(str), y=curve_all["avg_power"],
-            mode="lines+markers", name="All-time average",
-            line=dict(color=C["muted"], width=1.5, dash="dash"),
-            marker=dict(size=5),
-        ))
-        if len(curve_period) > 0 and date_range != "All time":
-            fig_curve.add_trace(go.Scatter(
-                x=curve_period["bucket"].astype(str),
-                y=curve_period["best_power"],
-                mode="lines+markers", name=f"Best — {date_range}",
-                line=dict(color=C["green"], width=2.5), marker=dict(size=8),
-            ))
-        fig_curve.add_hline(y=FTP_CURRENT, line_dash="dot",
-                            line_color=C["yellow"],
-                            annotation_text=f"FTP {FTP_CURRENT}W")
-        fig_curve.update_layout(
-            title="Best Avg Power per Duration",
-            height=380, **PLOTLY_LAYOUT
-        )
-        st.plotly_chart(fig_curve, use_container_width=True)
-
-    with col2:
-        fig_wkg_curve = go.Figure()
-        fig_wkg_curve.add_trace(go.Scatter(
-            x=curve_all["bucket"].astype(str), y=curve_all["best_wkg"],
-            mode="lines+markers", name="All-time best W/kg",
-            line=dict(color=C["purple"], width=2.5), marker=dict(size=8),
-        ))
-        if len(curve_period) > 0 and date_range != "All time":
-            fig_wkg_curve.add_trace(go.Scatter(
-                x=curve_period["bucket"].astype(str),
-                y=curve_period["best_wkg"],
-                mode="lines+markers", name=f"Best W/kg — {date_range}",
-                line=dict(color=C["green"], width=2.5), marker=dict(size=8),
-            ))
-        fig_wkg_curve.add_hline(y=WKG_CURRENT, line_dash="dot",
-                                line_color=C["yellow"],
-                                annotation_text=f"{WKG_CURRENT:.2f} W/kg (current FTP)")
-        fig_wkg_curve.update_layout(
-            title="Best W/kg per Duration (climber's view)",
-            height=380, **PLOTLY_LAYOUT
-        )
-        st.plotly_chart(fig_wkg_curve, use_container_width=True)
-
-    # Gap analysis: period best vs all-time best
-    if len(curve_period) > 0 and date_range != "All time":
-        merged = curve_all.merge(
-            curve_period, on="bucket", suffixes=("_all", "_now")
-        )
-        if len(merged) > 0:
-            merged["gap_pct"] = (
-                (merged["best_power_now"] - merged["best_power_all"])
-                / merged["best_power_all"] * 100
-            )
-            worst = merged.loc[merged["gap_pct"].idxmin()]
-            st.markdown(
-                f'<div style="background:{C["accent"]}22; border:1px solid '
-                f'{C["accent"]}; border-radius:8px; padding:12px; '
-                f'color:{C["text"]};">'
-                f'📏 Biggest gap to all-time best: <b>{worst["bucket"]}</b> '
-                f'rides ({worst["gap_pct"]:+.1f}% — '
-                f'{worst["best_power_now"]:.0f}W now vs '
-                f'{worst["best_power_all"]:.0f}W all-time).</div>',
-                unsafe_allow_html=True
-            )
-else:
-    st.info("Not enough power data to build the curve.")
-
-st.markdown("---")
-
-# ── True power-duration curve from Intervals.icu (per-second data) ───────────
-_pdc = fetch_true_power_curve()
-if _pdc:
-    st.markdown("### ⚡ True Power-Duration Curve (Intervals.icu)")
-    st.caption(
-        "Real per-second bests — covers the period Intervals.icu has full "
-        "ride files for."
-    )
-    _PDC_COLORS = [C["purple"], C["green"], C["yellow"], C["accent"]]
-    _ticks = [1, 5, 15, 60, 300, 1200, 3600, 10800]
-    _tick_lbl = ["1s", "5s", "15s", "1m", "5m", "20m", "1h", "3h"]
-    fig_pdc = go.Figure()
-    for i, (label, (secs, watts)) in enumerate(_pdc.items()):
-        pts = [(s, w) for s, w in zip(secs, watts)
-               if w is not None and s and s >= 1]
-        if not pts:
-            continue
-        fig_pdc.add_trace(go.Scatter(
-            x=[p[0] for p in pts], y=[p[1] for p in pts],
-            mode="lines", name=label,
-            line=dict(color=_PDC_COLORS[i % len(_PDC_COLORS)], width=2.5),
-        ))
-    fig_pdc.add_hline(y=FTP_CURRENT, line_dash="dot", line_color=C["yellow"],
-                      annotation_text=f"FTP {FTP_CURRENT}W")
-    fig_pdc.update_layout(height=400, **PLOTLY_LAYOUT)
-    fig_pdc.update_xaxes(type="log", tickvals=_ticks, ticktext=_tick_lbl,
-                         title_text="Duration")
-    fig_pdc.update_yaxes(title_text="Watts")
-    st.plotly_chart(fig_pdc, use_container_width=True)
-    st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FTP PROGRESSION — month by month
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 📶 FTP Progression — Month by Month")
-
-_eftp_num = (
-    pd.to_numeric(df_all["eftp"], errors="coerce")
-    if "eftp" in df_all.columns else pd.Series(dtype=float)
-)
-has_eftp = _eftp_num.notna().sum() > 3
-
-if has_eftp:
-    src = df_all.copy()
-    src["ftp_metric"] = _eftp_num
-    ftp_label = "eFTP (Intervals.icu)"
-else:
-    src = df_all.copy()
-    src["power_avg"]  = pd.to_numeric(src["power_avg"], errors="coerce")
-    src["if_score"]   = pd.to_numeric(src["if_score"], errors="coerce")
-    src["duration_h"] = pd.to_numeric(src["duration_h"], errors="coerce")
-    src["ftp_metric"] = np.where(
-        (src["if_score"] >= 0.78) & (src["duration_h"] >= 0.75),
-        src["power_avg"], np.nan
-    )
-    ftp_label = "Threshold proxy — best avg power in hard rides (IF ≥ 0.78, ≥ 45 min)"
-
-monthly_ftp = (
-    src.dropna(subset=["ftp_metric"])
-    .resample("MS", on="date")["ftp_metric"]
-    .max()
-    .reset_index()
-    .dropna()
-)
-
-if len(monthly_ftp) > 1:
-    monthly_ftp["trend3"] = monthly_ftp["ftp_metric"].rolling(3, min_periods=1).mean()
-
-    fig_ftp = go.Figure()
-    fig_ftp.add_trace(go.Bar(
-        x=monthly_ftp["date"], y=monthly_ftp["ftp_metric"],
-        name=ftp_label, marker_color=C["accent"], opacity=0.55,
-    ))
-    fig_ftp.add_trace(go.Scatter(
-        x=monthly_ftp["date"], y=monthly_ftp["trend3"],
-        name="3-month trend", mode="lines",
-        line=dict(color=C["green"], width=3),
-    ))
-    fig_ftp.add_hline(y=FTP_CURRENT, line_dash="dot", line_color=C["yellow"],
-                      annotation_text=f"Current FTP {FTP_CURRENT}W")
-    fig_ftp.add_hline(y=FTP_PRE, line_dash="dot", line_color=C["purple"],
-                      annotation_text=f"Pre-accident {FTP_PRE}W", opacity=0.4)
-    try:
-        fig_ftp.add_vline(x="2025-06-15", line_dash="dash",
-                          line_color=C["red"],
-                          annotation_text="Surgery", opacity=0.6)
-    except Exception:
-        pass
-    fig_ftp.update_layout(
-        title=f"Monthly FTP Progression — {ftp_label}",
-        height=400, barmode="overlay", **PLOTLY_LAYOUT
-    )
-    st.plotly_chart(fig_ftp, use_container_width=True)
-
-    last6 = monthly_ftp.tail(6)
-    if len(last6) >= 2:
-        delta6 = last6["ftp_metric"].iloc[-1] - last6["ftp_metric"].iloc[0]
-        d_color = C["green"] if delta6 >= 0 else C["red"]
-        st.markdown(
-            f'<div style="background:{d_color}22; border:1px solid {d_color}; '
-            f'border-radius:8px; padding:12px; color:{C["text"]};">'
-            f'{"📈" if delta6 >= 0 else "📉"} Last 6 months: '
-            f'<b>{delta6:+.0f}W</b> '
-            f'({last6["ftp_metric"].iloc[0]:.0f}W → '
-            f'{last6["ftp_metric"].iloc[-1]:.0f}W).</div>',
-            unsafe_allow_html=True
-        )
-else:
-    st.info("Not enough data to build the FTP progression chart.")
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ELEVATION — climbing volume
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## ⛰️ Climbing Volume")
-st.caption("Last 12 months.")
-
-if "elevation" in df_12m.columns:
-    elev_series = pd.to_numeric(df_12m["elevation"], errors="coerce").fillna(0)
-    total_elev  = elev_series.sum()
-    dur_sum     = pd.to_numeric(df_12m["duration_h"], errors="coerce").sum()
-    climb_rate  = total_elev / dur_sum if dur_sum > 0 else 0
-
-    weekly_elev = (
-        df_12m.assign(elev=elev_series)
-        .resample("W", on="date")["elev"]
-        .sum()
-        .reset_index()
-    )
-    weeks_n    = max(len(weekly_elev), 1)
-    weekly_avg = total_elev / weeks_n
-    best_week  = weekly_elev["elev"].max() if len(weekly_elev) > 0 else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Elevation", f"{total_elev:,.0f} m")
-    with col2:
-        st.metric("Weekly Average", f"{weekly_avg:,.0f} m")
-    with col3:
-        st.metric("Best Week", f"{best_week:,.0f} m")
-    with col4:
-        st.metric("Climbing Rate", f"{climb_rate:.0f} m/h")
-
-    elev_colors = [
-        C["purple"] if v >= 4000 else
-        C["green"]  if v >= 2500 else
-        C["yellow"] if v >= 1000 else C["muted"]
-        for v in weekly_elev["elev"]
-    ]
-    fig_elev = go.Figure()
-    fig_elev.add_trace(go.Bar(
-        x=weekly_elev["date"], y=weekly_elev["elev"],
-        marker_color=elev_colors, name="Weekly elevation", opacity=0.8,
-    ))
-    fig_elev.add_trace(go.Scatter(
-        x=weekly_elev["date"],
-        y=weekly_elev["elev"].rolling(4, min_periods=1).mean(),
-        mode="lines", name="4-week trend",
-        line=dict(color=C["accent"], width=2.5),
-    ))
-    fig_elev.update_layout(
-        title="Weekly Elevation Gain — Purple ≥4,000m · Green ≥2,500m · Yellow ≥1,000m",
-        height=350, **PLOTLY_LAYOUT
-    )
-    st.plotly_chart(fig_elev, use_container_width=True)
-else:
-    st.info("No elevation column found in the dataset.")
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# THIS BLOCK vs SAME PERIOD LAST YEAR
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🔄 This Block vs Same Period Last Year")
-
-yoy_days = days_map[date_range] if date_range != "All time" else 365
-yoy_label = date_range if date_range != "All time" else "Last 12 months"
-st.caption(f"Comparing {yoy_label.lower()} vs the same window one year earlier.")
-
-cur_start  = now - timedelta(days=yoy_days)
-prev_start = cur_start - timedelta(days=365)
-prev_end   = now - timedelta(days=365)
-
-cur_blk  = df_all[df_all["date"] >= cur_start].copy()
-prev_blk = df_all[
-    (df_all["date"] >= prev_start) & (df_all["date"] < prev_end)
-].copy()
-
-
-def block_stats(frame):
-    if len(frame) == 0:
-        return dict(sessions=0, tss=0, hours=0, elev=0, avg_if=0,
-                    avg_wkg=0, ctl_gain=0)
-    tss   = pd.to_numeric(frame["tss"], errors="coerce").sum()
-    hours = pd.to_numeric(frame["duration_h"], errors="coerce").sum()
-    elev  = (pd.to_numeric(frame["elevation"], errors="coerce").sum()
-             if "elevation" in frame.columns else 0)
-    return dict(
-        sessions=len(frame),
-        tss=tss,
-        hours=hours,
-        elev=elev,
-        avg_if=safe_mean(frame["if_score"]),
-        avg_wkg=safe_mean(frame["w_per_kg"]),
-        ctl_gain=float(frame["ctl"].iloc[-1] - frame["ctl"].iloc[0]),
-    )
-
-
-cs = block_stats(cur_blk)
-ps = block_stats(prev_blk)
-
-if ps["sessions"] == 0:
-    st.info("No data for the same period last year.")
-else:
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Sessions", f"{cs['sessions']}",
-                  delta=f"{cs['sessions'] - ps['sessions']:+d} vs last year")
-    with col2:
-        st.metric("Total TSS", f"{cs['tss']:.0f}",
-                  delta=f"{cs['tss'] - ps['tss']:+.0f} vs last year")
-    with col3:
-        st.metric("Hours", f"{cs['hours']:.0f}h",
-                  delta=f"{cs['hours'] - ps['hours']:+.0f}h vs last year")
-    with col4:
-        st.metric("Elevation", f"{cs['elev']:,.0f} m",
-                  delta=f"{cs['elev'] - ps['elev']:+,.0f} m vs last year")
-
-    col5, col6, col7 = st.columns(3)
-    with col5:
-        st.metric("Avg IF", f"{cs['avg_if']:.3f}" if cs['avg_if'] > 0 else "—",
-                  delta=(f"{cs['avg_if'] - ps['avg_if']:+.3f}"
-                         if cs['avg_if'] > 0 and ps['avg_if'] > 0 else None))
-    with col6:
-        st.metric("Avg W/kg", f"{cs['avg_wkg']:.2f}" if cs['avg_wkg'] > 0 else "—",
-                  delta=(f"{cs['avg_wkg'] - ps['avg_wkg']:+.2f}"
-                         if cs['avg_wkg'] > 0 and ps['avg_wkg'] > 0 else None))
-    with col7:
-        st.metric("CTL Change", f"{cs['ctl_gain']:+.1f}",
-                  delta=f"{cs['ctl_gain'] - ps['ctl_gain']:+.1f} vs last year")
-
-    def weekly_aligned(frame, start):
-        if len(frame) == 0:
-            return pd.DataFrame(columns=["week", "tss"])
-        w = frame.resample("W", on="date")["tss"].sum().reset_index()
-        w["week"] = ((w["date"] - pd.Timestamp(start)).dt.days // 7) + 1
-        return w[w["week"] >= 1]
-
-    cur_w  = weekly_aligned(cur_blk, cur_start)
-    prev_w = weekly_aligned(prev_blk, prev_start)
-
-    fig_yoy = go.Figure()
-    fig_yoy.add_trace(go.Bar(
-        x=prev_w["week"], y=prev_w["tss"],
-        name="Last year", marker_color=C["muted"], opacity=0.5,
-    ))
-    fig_yoy.add_trace(go.Bar(
-        x=cur_w["week"], y=cur_w["tss"],
-        name="This block", marker_color=C["green"], opacity=0.85,
-    ))
-    fig_yoy.update_layout(
-        barmode="overlay",
-        title=f"Weekly TSS — {yoy_label} vs Same Window Last Year",
-        height=330,
-        **PLOTLY_LAYOUT
-    )
-    fig_yoy.update_xaxes(title_text="Week of block")
-    st.plotly_chart(fig_yoy, use_container_width=True)
-
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# W' & CRITICAL POWER — anaerobic capacity (Intervals.icu power model)
-# ══════════════════════════════════════════════════════════════════════════════
-_has_wprime = "w_prime" in df_all.columns and \
-    pd.to_numeric(df_all["w_prime"], errors="coerce").notna().sum() > 2
-
-if _has_wprime:
-    st.markdown("## 🔋 W' & Critical Power (anaerobic battery)")
-    st.caption(
-        "CP (Critical Power) is the power you can hold almost indefinitely — "
-        "close to FTP. W' (\"W-prime\") is your anaerobic battery: the energy "
-        "in joules available above CP for attacks, surges and steep ramps. "
-        "Both estimated by Intervals.icu from your power-duration data."
-    )
-
-    wp = df_all.copy()
-    wp["cp"]      = pd.to_numeric(wp["cp"], errors="coerce")
-    wp["w_prime"] = pd.to_numeric(wp["w_prime"], errors="coerce")
-    wp_m = (
-        wp.dropna(subset=["w_prime"])
-        .resample("MS", on="date")
-        .agg(cp=("cp", "last"), w_prime=("w_prime", "last"))
-        .dropna(subset=["w_prime"])
-        .reset_index()
-    )
-
-    if len(wp_m) > 0:
-        cur_cp = wp_m["cp"].iloc[-1] if pd.notna(wp_m["cp"].iloc[-1]) else None
-        cur_wp = wp_m["w_prime"].iloc[-1]
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Current W'", f"{cur_wp/1000:.1f} kJ")
-        with c2:
-            st.metric("Current CP", f"{cur_cp:.0f} W" if cur_cp else "—")
-        with c3:
-            # ~how long you can hold a hard attack above CP, e.g. +50W
-            if cur_cp:
-                secs = cur_wp / 50.0
-                st.metric("Battery @ CP+50W", f"{secs/60:.1f} min")
-            else:
-                st.metric("Battery @ CP+50W", "—")
-
-        fig_wp = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_wp.add_trace(go.Scatter(
-            x=wp_m["date"], y=wp_m["w_prime"] / 1000.0,
-            mode="lines+markers", name="W' (kJ)",
-            line=dict(color=C["purple"], width=2.5),
-        ), secondary_y=False)
-        fig_wp.add_trace(go.Scatter(
-            x=wp_m["date"], y=wp_m["cp"],
-            mode="lines+markers", name="CP (W)",
-            line=dict(color=C["green"], width=2.5),
-        ), secondary_y=True)
-        fig_wp.update_layout(title="W' and Critical Power over time",
-                             height=380, **PLOTLY_LAYOUT)
-        fig_wp.update_yaxes(title_text="W' (kJ)", secondary_y=False)
-        fig_wp.update_yaxes(title_text="CP (W)", secondary_y=True)
-        st.plotly_chart(fig_wp, use_container_width=True)
-
-        st.markdown(
-            f'<div style="background:{C["purple"]}22; border:1px solid '
-            f'{C["purple"]}; border-radius:8px; padding:12px; '
-            f'color:{C["text"]};">'
-            f'🔋 As a 57kg pure climber your W\' will always be modest — '
-            f'that is normal and not a weakness. Your edge is a high, '
-            f'sustainable CP/FTP relative to weight, not a big anaerobic '
-            f'punch. Track W\' mainly so a sudden drop flags fatigue or '
-            f'detraining.</div>',
-            unsafe_allow_html=True
-        )
-    st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PERIODISATION BLOCKS — auto-detected from weekly load, ramp & intensity mix
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🧱 Periodisation Blocks (auto-detected)")
-st.caption(
-    "Heuristic phase detection: weekly TSS vs recent norm, CTL ramp, and the "
-    "share of TSS from quality sessions (FTP/SST/TEMPO/PIRAMIDAL/VO2MAX/"
-    "BILLAT/Q-I)."
-)
-
-_p = df_all.copy()
-_p["tss"] = pd.to_numeric(_p["tss"], errors="coerce").fillna(0)
-_p["is_q"] = _p["training_type"].isin(FTP_DRIVERS)
-_p["q_tss"] = np.where(_p["is_q"], _p["tss"], 0.0)
-
-wk_blocks = _p.resample("W", on="date").agg(
-    tss=("tss", "sum"), q_tss=("q_tss", "sum"), ctl=("ctl", "last"),
-)
-wk_blocks["ctl"] = wk_blocks["ctl"].ffill()
-wk_blocks["ramp"] = wk_blocks["ctl"].diff()
-wk_blocks["q_share"] = np.where(
-    wk_blocks["tss"] > 0, wk_blocks["q_tss"] / wk_blocks["tss"], 0.0
-)
-wk_blocks["tss_norm"] = wk_blocks["tss"].rolling(8, min_periods=4).median()
-
-
-def _phase(row):
-    if row["tss"] == 0:
-        return "Off"
-    norm = row["tss_norm"] if row["tss_norm"] and row["tss_norm"] > 0 else row["tss"]
-    if row["tss"] < 0.55 * norm or (row["ramp"] is not None
-                                    and row["ramp"] < -2.0):
-        return "Recovery"
-    if row["q_share"] >= 0.25:
-        return "Build"
-    if row["ramp"] is not None and row["ramp"] > 0.2:
-        return "Base"
-    return "Maintain"
-
-
-wk_blocks["phase"] = wk_blocks.apply(_phase, axis=1)
-
-PHASE_COLORS = {
-    "Base": C["accent"], "Build": C["green"], "Recovery": C["yellow"],
-    "Maintain": C["muted"], "Off": "#30363d",
-}
-
-fig_blocks = go.Figure()
-for ph, color in PHASE_COLORS.items():
-    sub = wk_blocks[wk_blocks["phase"] == ph]
-    if len(sub) == 0:
-        continue
-    fig_blocks.add_trace(go.Bar(
-        x=sub.index, y=sub["tss"], name=ph, marker_color=color, opacity=0.85,
-    ))
-fig_blocks.add_trace(go.Scatter(
-    x=wk_blocks.index, y=wk_blocks["ctl"] * 4,
-    name="CTL (scaled x4)", mode="lines",
-    line=dict(color="#e6edf3", width=1.5, dash="dot"),
-))
-fig_blocks.update_layout(
-    barmode="overlay", title="Weekly TSS coloured by detected phase",
-    height=380, **PLOTLY_LAYOUT
-)
-st.plotly_chart(fig_blocks, use_container_width=True)
-
-_recent = wk_blocks[wk_blocks["phase"] != "Off"]
-if len(_recent) > 0:
-    cur_phase = _recent["phase"].iloc[-1]
-    streak = 0
-    for ph in reversed(_recent["phase"].tolist()):
-        if ph == cur_phase:
-            streak += 1
-        else:
-            break
-    _phase_tips = {
-        "Build": "Quality block in progress — protect the two hard days, "
-                 "keep everything else genuinely easy.",
-        "Base": "Volume phase — CTL is climbing on aerobic work. Add quality "
-                "when the ramp flattens.",
-        "Recovery": "Absorbing the work — resist adding intensity this week.",
-        "Maintain": "Holding pattern — fine short-term, but FTP needs a Build "
-                    "block to move.",
-    }
-    st.markdown(
-        f'<div style="background:{PHASE_COLORS.get(cur_phase, C["muted"])}22; '
-        f'border:1px solid {PHASE_COLORS.get(cur_phase, C["muted"])}; '
-        f'border-radius:8px; padding:12px; color:{C["text"]};">'
-        f'🧱 Current phase: <b>{cur_phase}</b> ({streak} week'
-        f'{"s" if streak != 1 else ""}). '
-        f'{_phase_tips.get(cur_phase, "")}</div>',
-        unsafe_allow_html=True
-    )
-st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TRAINING TYPE ANALYSIS — all time
+# TRAINING TYPE ANALYSIS
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## 🏋️ Training Type Analysis")
-st.caption("Showing all-time data regardless of time filter")
+st.caption("All-time data regardless of time filter")
 
 col1, col2 = st.columns(2)
-
 with col1:
     type_counts = df_main_all["training_type"].value_counts().reset_index()
     type_counts.columns = ["type", "count"]
-
-    fig_types = px.bar(
-        type_counts, x="count", y="type", orientation="h",
+    fig_types = px.bar(type_counts, x="count", y="type", orientation="h",
         color="type", title="Sessions per Training Type (All Time)",
-        color_discrete_sequence=px.colors.qualitative.Set2
-    )
+        color_discrete_sequence=px.colors.qualitative.Set2)
     fig_types.update_layout(height=400, showlegend=False, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_types, use_container_width=True)
 
 with col2:
-    if "if_score" in df_main_all.columns:
-        type_if = (
-            df_main_all.groupby("training_type")["if_score"]
-            .mean()
-            .reset_index()
-            .sort_values("if_score", ascending=True)
-        )
-        fig_if = px.bar(
-            type_if, x="if_score", y="training_type", orientation="h",
-            color="if_score", title="Avg Intensity Factor by Type (All Time)",
-            color_continuous_scale=[[0, C["accent"]], [0.5, C["yellow"]], [1, C["red"]]]
-        )
-        fig_if.add_vline(x=0.75, line_dash="dash", line_color=C["orange"],
-                          annotation_text="SST (0.75)")
-        fig_if.add_vline(x=0.85, line_dash="dash", line_color=C["red"],
-                          annotation_text="FTP (0.85)")
-        fig_if.update_layout(height=400, **PLOTLY_LAYOUT)
-        st.plotly_chart(fig_if, use_container_width=True)
+    type_if = (df_main_all.groupby("training_type")["if_score"]
+               .mean().reset_index().sort_values("if_score", ascending=True))
+    fig_if = px.bar(type_if, x="if_score", y="training_type", orientation="h",
+        color="if_score", title="Avg Intensity Factor by Type (All Time)",
+        color_continuous_scale=[[0, C["accent"]], [0.5, C["yellow"]], [1, C["red"]]])
+    fig_if.add_vline(x=0.75, line_dash="dash", line_color=C["orange"],
+                      annotation_text="SST (0.75)")
+    fig_if.add_vline(x=0.85, line_dash="dash", line_color=C["red"],
+                      annotation_text="FTP (0.85)")
+    fig_if.update_layout(height=400, **PLOTLY_LAYOUT)
+    st.plotly_chart(fig_if, use_container_width=True)
 
 st.markdown("---")
 
@@ -1478,99 +928,30 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## 📅 Recent Sessions")
 
-display_cols = [
-    c for c in [
-        "date", "training_type", "tss", "if_score",
-        "power_avg", "duration_h", "hr_avg",
-        "w_per_kg", "elevation", "fatigue_state"
-    ]
-    if c in df_all.columns
-]
-
+display_cols = [c for c in ["date", "training_type", "tss", "if_score", "power_avg",
+    "duration_h", "hr_avg", "w_per_kg", "elevation", "temp_avg", "quality_score",
+    "fatigue_state"] if c in df_all.columns]
 recent = df_all[display_cols].tail(20).sort_values("date", ascending=False).copy()
 recent["date"] = recent["date"].dt.strftime("%d %b %Y")
-
-for col in ["tss", "if_score", "power_avg", "duration_h", "hr_avg", "w_per_kg", "elevation"]:
+for col in ["tss", "if_score", "power_avg", "duration_h", "hr_avg",
+            "w_per_kg", "elevation", "temp_avg", "quality_score"]:
     if col in recent.columns:
         recent[col] = pd.to_numeric(recent[col], errors="coerce").round(2)
-
 if "training_type" in recent.columns:
     recent["training_type"] = recent["training_type"].fillna("—")
-
 recent = recent.rename(columns={
-    "date": "Date", "training_type": "Type", "tss": "TSS",
-    "if_score": "IF", "power_avg": "Power (W)", "duration_h": "Hours",
-    "hr_avg": "Avg HR", "w_per_kg": "W/kg", "elevation": "Elev (m)",
-    "fatigue_state": "State"
-})
-
-st.dataframe(
-    recent,
-    use_container_width=True,
-    height=450,
+    "date": "Date", "training_type": "Type", "tss": "TSS", "if_score": "IF",
+    "power_avg": "Power (W)", "duration_h": "Hours", "hr_avg": "Avg HR",
+    "w_per_kg": "W/kg", "elevation": "Elev (m)", "temp_avg": "Temp °C",
+    "quality_score": "Quality", "fatigue_state": "State"})
+st.dataframe(recent, use_container_width=True, height=450,
     column_config={
-        "TSS": st.column_config.ProgressColumn(
-            "TSS", min_value=0, max_value=300, format="%d"
-        ),
+        "TSS": st.column_config.ProgressColumn("TSS", min_value=0, max_value=300, format="%d"),
         "IF": st.column_config.NumberColumn("IF", format="%.3f"),
         "W/kg": st.column_config.NumberColumn("W/kg", format="%.2f"),
-    }
-)
+        "Quality": st.column_config.ProgressColumn("Quality", min_value=0, max_value=100, format="%.0f"),
+    })
 st.markdown("---")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# WELLNESS
-# ══════════════════════════════════════════════════════════════════════════════
-has_hrv = (
-    not wellness.empty
-    and "hrv" in wellness.columns
-    and wellness["hrv"].notna().sum() > 5
-)
-has_rhr = (
-    not wellness.empty
-    and "resting_hr" in wellness.columns
-    and wellness["resting_hr"].notna().sum() > 5
-)
-
-if has_hrv or has_rhr:
-    st.markdown("## 💚 Wellness & HRV")
-    wellness_recent = wellness[wellness["date"] >= pd.Timestamp(cutoff)]
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if has_hrv:
-            fig_hrv = go.Figure()
-            fig_hrv.add_trace(go.Scatter(
-                x=wellness_recent["date"],
-                y=wellness_recent["hrv"],
-                mode="lines+markers",
-                line=dict(color=C["green"], width=2),
-                name="HRV",
-                fill="tozeroy",
-                fillcolor="rgba(63,185,80,0.1)"
-            ))
-            fig_hrv.update_layout(
-                title="Heart Rate Variability (HRV)",
-                height=300, **PLOTLY_LAYOUT
-            )
-            st.plotly_chart(fig_hrv, use_container_width=True)
-
-    with col2:
-        if has_rhr:
-            fig_rhr = go.Figure()
-            fig_rhr.add_trace(go.Scatter(
-                x=wellness_recent["date"],
-                y=wellness_recent["resting_hr"],
-                mode="lines+markers",
-                line=dict(color=C["orange"], width=2),
-                name="Resting HR"
-            ))
-            fig_rhr.update_layout(
-                title="Resting Heart Rate",
-                height=300, **PLOTLY_LAYOUT
-            )
-            st.plotly_chart(fig_rhr, use_container_width=True)
-    st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEXT WEEK RECOMMENDATION
@@ -1581,45 +962,41 @@ tsb_now = float(df_all.iloc[-1]["tsb"])
 ctl_now = float(df_all.iloc[-1]["ctl"])
 atl_now = float(df_all.iloc[-1]["atl"])
 
-if tsb_now < -30:
-    rc = C["red"]
-    rt = "🚨 Rest or Very Easy Week"
-    rx = (f"TSB = {tsb_now:.1f} — Overreached. "
-          "Max 3 easy Z2 sessions. No quality work until TSB > -20.")
+# Override recommendation if efficiency alert is active
+fatigue_override = eff_delta and not np.isnan(eff_delta) and eff_delta < -5
+
+if fatigue_override:
+    rc, rt, rx = C["red"], "🚨 Physiological Fatigue Detected", \
+        f"W/BPM is {abs(eff_delta):.1f}% below baseline despite TSB = {tsb_now:+.1f}. " \
+        "Your body is more fatigued than TSB suggests. Reduce load this week."
+elif tsb_now < -30:
+    rc, rt, rx = C["red"], "🚨 Rest or Very Easy Week", \
+        f"TSB = {tsb_now:.1f} — Overreached. Max 3 easy Z2 sessions. No quality until TSB > -20."
 elif tsb_now < -10:
-    rc = C["orange"]
-    rt = "💪 Continue Hard Block"
-    rx = (f"TSB = {tsb_now:.1f} — Deep build phase. "
-          "2 quality sessions: Wednesday FTP intervals + Saturday PIRAMIDAL.")
+    rc, rt, rx = C["orange"], "💪 Continue Hard Block", \
+        f"TSB = {tsb_now:.1f} — Deep build. 2 quality sessions: Wednesday FTP + Saturday PIRAMIDAL."
 elif tsb_now < 5:
-    rc = C["yellow"]
-    rt = "✅ Standard Build Week"
-    rx = (f"TSB = {tsb_now:.1f} — Build phase. "
-          "Wednesday FTP/SST + Saturday PIRAMIDAL with TEMPO blocks.")
+    rc, rt, rx = C["yellow"], "✅ Standard Build Week", \
+        f"TSB = {tsb_now:.1f} — Build phase. Wednesday FTP/SST + Saturday PIRAMIDAL with TEMPO blocks."
 elif tsb_now < 20:
-    rc = C["green"]
-    rt = "🟢 Push Hard This Week"
-    rx = (f"TSB = {tsb_now:.1f} — Fresh and ready. "
-          "4x10min FTP Wednesday + long PIRAMIDAL Saturday.")
+    rc, rt, rx = C["green"], "🟢 Push Hard This Week", \
+        f"TSB = {tsb_now:.1f} — Fresh. 4x10min FTP Wednesday + long PIRAMIDAL Saturday."
 else:
-    rc = C["purple"]
-    rt = "⚡ Peak Form — Race or FTP Test"
-    rx = (f"TSB = {tsb_now:.1f} — Peak form. "
-          "Do a 20-min FTP test or your hardest session of the block.")
+    rc, rt, rx = C["purple"], "⚡ Peak Form — Race or FTP Test", \
+        f"TSB = {tsb_now:.1f} — Peak form. 20-min FTP test or hardest session of the block."
 
 st.markdown(
-    f'<div style="background:{rc}22; border: 2px solid {rc}; '
-    f'border-radius: 10px; padding: 20px; margin: 10px 0;">'
+    f'<div style="background:{rc}22; border: 2px solid {rc}; border-radius: 10px; '
+    f'padding: 20px; margin: 10px 0;">'
     f'<h3 style="color:{rc}; margin:0 0 10px 0;">{rt}</h3>'
     f'<p style="color:#c9d1d9; margin:0; font-size:1.05rem;">{rx}</p>'
     f'<p style="color:#8b949e; margin:10px 0 0 0; font-size:0.85rem;">'
-    f'CTL={ctl_now:.1f} · ATL={atl_now:.1f} · TSB={tsb_now:+.1f}</p>'
-    f'</div>',
+    f'CTL={ctl_now:.1f} · ATL={atl_now:.1f} · TSB={tsb_now:+.1f} · '
+    f'W/BPM vs baseline: {eff_delta:+.1f}%' if eff_delta and not np.isnan(eff_delta)
+    else f'CTL={ctl_now:.1f} · ATL={atl_now:.1f} · TSB={tsb_now:+.1f}'
+    + f'</p></div>',
     unsafe_allow_html=True
 )
 
 st.markdown("---")
-st.markdown(
-    "*Run `python src/intervals_api.py` to fetch latest data · "
-    "Then click Refresh Data*"
-)
+st.markdown("*Run `python src/intervals_api.py` to fetch latest data · Then click Refresh Data*")
