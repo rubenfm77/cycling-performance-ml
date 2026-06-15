@@ -13,6 +13,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from pathlib import Path
 from datetime import datetime, timedelta
+import requests
 
 st.set_page_config(
     page_title="Cycling Performance",
@@ -65,10 +66,59 @@ FTP_DRIVERS = ["FTP", "SST", "TEMPO", "PIRAMIDAL", "VO2MAX", "BILLAT", "Q-I INTE
 HOT_TEMP    = 28.0  # degrees C above which heat correction note appears
 
 
+def _fetch_from_api() -> pd.DataFrame:
+    """Fetch from Intervals.icu API — used on Streamlit Cloud when no local data."""
+    try:
+        athlete_id = st.secrets["INTERVALS_ATHLETE_ID"]
+        api_key    = st.secrets["INTERVALS_API_KEY"].replace("API_KEY:", "").strip()
+    except Exception:
+        return pd.DataFrame()
+    date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+    date_to   = datetime.now().strftime("%Y-%m-%dT23:59:59")
+    try:
+        r = requests.get(
+            f"https://intervals.icu/api/v1/athlete/{athlete_id}/activities",
+            auth=("API_KEY", api_key),
+            params={"oldest": date_from, "newest": date_to},
+            timeout=30
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        st.warning(f"API fetch failed: {e}")
+        return pd.DataFrame()
+    if not data:
+        return pd.DataFrame()
+    df = pd.json_normalize(data)
+    rename_map = {
+        "start_date_local": "date", "moving_time": "duration_secs",
+        "distance": "distance_m", "total_elevation_gain": "elevation",
+        "average_watts": "power_avg", "weighted_average_watts": "power_np",
+        "max_watts": "power_max", "average_heartrate": "hr_avg",
+        "average_cadence": "cadence", "average_temp": "temp_avg",
+        "icu_training_load": "tss", "icu_intensity": "if_score",
+        "icu_eftp": "eftp", "icu_fitness": "ctl", "icu_fatigue": "atl",
+        "icu_average_watts": "power_avg_icu", "icu_normalized_watts": "power_np_icu",
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+    if "duration_secs" in df.columns:
+        df["duration_h"] = pd.to_numeric(df["duration_secs"], errors="coerce") / 3600
+    if "power_avg" not in df.columns and "power_avg_icu" in df.columns:
+        df["power_avg"] = df["power_avg_icu"]
+    if "power_np" not in df.columns and "power_np_icu" in df.columns:
+        df["power_np"] = df["power_np_icu"]
+    df["weight"] = 57.0
+    df["training_type"] = "—"
+    return df
+
+
 @st.cache_data(ttl=3600)
 def load_data():
-    paths = ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]
     df = None
+    # Try local files first (your PC)
+    paths = ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]
     for p in paths:
         if Path(p).exists():
             if p.endswith(".csv"):
@@ -93,9 +143,15 @@ def load_data():
                     "Variability":            "variability",
                 })
             break
-
-    if df is None:
-        st.error("No data found. Run python src/intervals_api.py first.")
+    # Fallback: fetch live from Intervals.icu API (Streamlit Cloud)
+    if df is None or len(df) == 0:
+        st.info("📡 No local data found — fetching live from Intervals.icu...")
+        df = _fetch_from_api()
+    if df is None or len(df) == 0:
+        st.error(
+            "No data available. Add INTERVALS_ATHLETE_ID and INTERVALS_API_KEY "
+            "to Streamlit Cloud secrets (app Settings → Secrets)."
+        )
         st.stop()
 
     df["date"] = pd.to_datetime(df["date"])
