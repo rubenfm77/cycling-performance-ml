@@ -311,5 +311,5 @@ A 1-hour ride at exactly your FTP = 100 TSS. That's the baseline.
 
 ---
 
-*Built for: Ruben Fernandez · 57kg · Road cyclist · Castellar del Vallès, Catalonia*
+*Built for: Ruben Fernandez · 57kg · Road cyclist · Catalonia, Spain*
 *Data: 2019–2026 · 1030 sessions · Strava + TrainingPeaks + Intervals.icu*
