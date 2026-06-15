@@ -145,13 +145,23 @@ def load_data():
             break
     # Fallback: fetch live from Intervals.icu API (Streamlit Cloud)
     if df is None or len(df) == 0:
-        st.info("📡 No local data found — fetching live from Intervals.icu...")
+        st.info("📡 No local data — fetching from Intervals.icu API...")
+        # Debug: check secrets exist
+        try:
+            aid = st.secrets["INTERVALS_ATHLETE_ID"]
+            key = st.secrets["INTERVALS_API_KEY"]
+            st.info(f"✅ Secrets found: athlete={aid}, key starts with {key[:10]}")
+        except Exception as e:
+            st.error(f"❌ Secrets error: {e}")
+            st.stop()
         df = _fetch_from_api()
+        if df is not None and len(df) > 0:
+            st.success(f"✅ Fetched {len(df)} activities from API")
+        else:
+            st.error("❌ API returned no data — check secrets and athlete ID")
+            st.stop()
     if df is None or len(df) == 0:
-        st.error(
-            "No data available. Add INTERVALS_ATHLETE_ID and INTERVALS_API_KEY "
-            "to Streamlit Cloud secrets (app Settings → Secrets)."
-        )
+        st.error("No data available.")
         st.stop()
 
     df["date"] = pd.to_datetime(df["date"])
