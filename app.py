@@ -109,6 +109,8 @@ def _fetch_from_api() -> pd.DataFrame:
         df["power_avg"] = df["power_avg_icu"]
     if "power_np" not in df.columns and "power_np_icu" in df.columns:
         df["power_np"] = df["power_np_icu"]
+    if "power_np" not in df.columns:
+        df["power_np"] = df.get("power_avg", pd.Series([np.nan]*len(df)))
     df["weight"] = 57.0
     df["training_type"] = "—"
     return df
@@ -169,7 +171,7 @@ def load_data():
 
     # Optional columns
     df["temp_avg"] = pd.to_numeric(df["temp_avg"], errors="coerce") if "temp_avg" in df.columns else np.nan
-    df["weight"]   = pd.to_numeric(df["weight"],   errors="coerce").fillna(57.0) if "weight" in df.columns else 57.0
+    df["weight"]   = pd.to_numeric(df["weight"],   errors="coerce").fillna(57.0) if "weight" in df.columns else pd.Series([57.0] * len(df))
 
     df["ctl"] = df["tss"].ewm(span=42, adjust=False).mean()
     df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
@@ -188,14 +190,14 @@ def load_data():
     # Combines: efficiency vs 28d avg + TSS + IF
     df["quality_score"] = np.nan
     valid = df["efficiency"].notna() & df["eff_28d"].notna()
-    eff_z   = (df.loc[valid, "efficiency"] - df.loc[valid, "eff_28d"]) / \
-              df.loc[valid, "eff_28d"].std().clip(lower=0.01)
-    tss_z   = (df.loc[valid, "tss"] - df.loc[valid, "tss"].mean()) / \
-              df.loc[valid, "tss"].std().clip(lower=0.01)
-    if_z    = (df.loc[valid, "if_score"] - df.loc[valid, "if_score"].mean()) / \
-              df.loc[valid, "if_score"].std().clip(lower=0.01)
+    eff_std = max(float(df.loc[valid, "eff_28d"].std()), 0.01)
+    tss_std = max(float(df.loc[valid, "tss"].std()), 0.01)
+    if_std  = max(float(df.loc[valid, "if_score"].std()), 0.01)
+    eff_z   = (df.loc[valid, "efficiency"] - df.loc[valid, "eff_28d"]) / eff_std
+    tss_z   = (df.loc[valid, "tss"] - df.loc[valid, "tss"].mean()) / tss_std
+    if_z    = (df.loc[valid, "if_score"] - df.loc[valid, "if_score"].mean()) / if_std
     raw_score = (eff_z * 0.5 + tss_z * 0.3 + if_z * 0.2)
-    min_s, max_s = raw_score.min(), raw_score.max()
+    min_s, max_s = float(raw_score.min()), float(raw_score.max())
     if max_s > min_s:
         df.loc[valid, "quality_score"] = ((raw_score - min_s) / (max_s - min_s) * 100).clip(0, 100)
 
@@ -204,7 +206,7 @@ def load_data():
     df["is_quality"]      = df["if_score"] >= 0.85
     df["is_z3_drift"]     = (df["if_score"] >= 0.75) & (df["if_score"] < 0.85)
     df["is_true_z2"]      = df["if_score"] < 0.75
-    df["is_hot_session"]  = df["temp_avg"] > HOT_TEMP
+    df["is_hot_session"]  = df["temp_avg"].fillna(0) > HOT_TEMP
 
     df["year"]  = df["date"].dt.year
     df["month"] = df["date"].dt.to_period("M")
@@ -726,7 +728,7 @@ st.markdown("## 📈 FTP Progression — Month by Month")
 col1, col2 = st.columns(2)
 with col1:
     monthly_ftp = (
-        df_all[df_all["power_np"].notna() & (df_all["duration_h"] > 0.75)]
+        df_all[df_all["power_np"].fillna(0) > 0]
         .groupby(df_all["date"].dt.to_period("M"))
         .agg(best_np=("power_np", "max"), sessions=("tss", "count"))
         .reset_index()
@@ -757,7 +759,7 @@ with col1:
 
 with col2:
     annual_ftp = (
-        df_all[df_all["power_np"].notna() & (df_all["duration_h"] > 0.75)]
+        df_all[df_all["power_np"].fillna(0) > 0]
         .groupby("year")
         .agg(peak_ftp=("power_np", lambda x: x.max() * 0.95),
              avg_wkg=("w_per_kg", "mean"))
