@@ -145,44 +145,38 @@ def load_data():
             break
     # Fallback: fetch live from Intervals.icu API (Streamlit Cloud)
     if df is None or len(df) == 0:
-        st.info("📡 No local data — fetching from Intervals.icu API...")
-        # Debug: check secrets exist
-        try:
-            aid = st.secrets["INTERVALS_ATHLETE_ID"]
-            key = st.secrets["INTERVALS_API_KEY"]
-            st.info(f"✅ Secrets found: athlete={aid}, key starts with {key[:10]}")
-        except Exception as e:
-            st.error(f"❌ Secrets error: {e}")
-            st.stop()
         df = _fetch_from_api()
-        if df is not None and len(df) > 0:
-            st.success(f"✅ Fetched {len(df)} activities from API")
-        else:
-            st.error("❌ API returned no data — check secrets and athlete ID")
-            st.stop()
     if df is None or len(df) == 0:
-        st.error("No data available.")
+        st.error(
+            "No data available. Add INTERVALS_ATHLETE_ID and INTERVALS_API_KEY "
+            "to Streamlit Cloud secrets (app Settings → Secrets)."
+        )
         st.stop()
 
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"])
     df = df.sort_values("date").reset_index(drop=True)
 
-    df["tss"]      = pd.to_numeric(df["tss"],       errors="coerce").fillna(0)
-    df["power_avg"]= pd.to_numeric(df["power_avg"], errors="coerce")
-    df["hr_avg"]   = pd.to_numeric(df["hr_avg"],    errors="coerce")
-    df["duration_h"]= pd.to_numeric(df["duration_h"],errors="coerce")
-    df["elevation"] = pd.to_numeric(df["elevation"], errors="coerce")
-    df["if_score"]  = pd.to_numeric(df["if_score"],  errors="coerce")
-    df["temp_avg"]  = pd.to_numeric(df.get("temp_avg", pd.Series(dtype=float)), errors="coerce")
+    # Safe column creation — works whether data comes from Excel or API
+    for col in ["tss", "power_avg", "hr_avg", "duration_h", "elevation",
+                "if_score", "power_np", "power_max", "cadence"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = np.nan
+
+    df["tss"] = df["tss"].fillna(0)
+
+    # Optional columns
+    df["temp_avg"] = pd.to_numeric(df["temp_avg"], errors="coerce") if "temp_avg" in df.columns else np.nan
+    df["weight"]   = pd.to_numeric(df["weight"],   errors="coerce").fillna(57.0) if "weight" in df.columns else 57.0
 
     df["ctl"] = df["tss"].ewm(span=42, adjust=False).mean()
     df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
     df["tsb"] = df["ctl"] - df["atl"]
 
-    weight = pd.to_numeric(df.get("weight", pd.Series([57.0]*len(df))),
-                           errors="coerce").fillna(57.0)
-    df["w_per_kg"]   = df["power_avg"] / weight
-    df["efficiency"] = np.where(df["hr_avg"] > 0, df["power_avg"] / df["hr_avg"], np.nan)
+    df["w_per_kg"]    = df["power_avg"] / df["weight"]
+    df["efficiency"]  = np.where(df["hr_avg"] > 0, df["power_avg"] / df["hr_avg"], np.nan)
     df["ftp_stimulus"]= (df["if_score"] ** 2) * df["duration_h"] * 100
 
     # ── Rolling efficiency metrics ────────────────────────────────────────────
