@@ -14,6 +14,7 @@ from plotly.subplots import make_subplots
 from pathlib import Path
 from datetime import datetime, timedelta
 import requests
+import re
 
 st.set_page_config(
     page_title="Cycling Performance",
@@ -112,7 +113,40 @@ def _fetch_from_api() -> pd.DataFrame:
     if "power_np" not in df.columns:
         df["power_np"] = df.get("power_avg", pd.Series([np.nan]*len(df)))
     df["weight"] = 57.0
-    df["training_type"] = "—"
+
+    # ── Derive training_type from the paired/planned workout label ────────────
+    # Intervals.icu attaches the planned workout (the "Workout: FTP" tag you see
+    # in the app). Its name is exposed on the activity record. The activity's own
+    # "name" is the creative Strava title (e.g. "Arise and raze..."), so we must
+    # look at the workout fields, not the activity name. We scan the most likely
+    # fields for one of your known type labels and fall back to "—".
+    KNOWN_TYPES = [
+        "AEROBIC BASE", "VO2MAX", "VO2 MAX", "Q-I INTERVALS", "FATMAX",
+        "PIRAMIDAL", "BILLAT", "TORQUE", "TEMPO", "END", "FTP", "SST",
+    ]
+    # Only trust real workout-label fields. Do NOT fall back to the activity
+    # "name" — that is the creative Strava title and would false-match (e.g.
+    # "around the bEND" -> END, "FRIENDLY tempo" -> TEMPO).
+    candidate_cols = [
+        "icu_workout_name", "workout_name", "workout_doc_name",
+        "pairedWorkoutName", "paired_workout_name", "icu_workout", "workout",
+    ]
+
+    def _match_type(row) -> str:
+        for col in candidate_cols:
+            if col in row and isinstance(row[col], str) and row[col].strip():
+                hay = " " + re.sub(r"[^A-Z0-9 ]", " ", row[col].upper())
+                hay = re.sub(r"\s+", " ", hay) + " "
+                for t in sorted(KNOWN_TYPES, key=len, reverse=True):
+                    # normalize the label the same way as the haystack so
+                    # hyphenated labels (Q-I INTERVALS) match correctly
+                    tok = re.sub(r"[^A-Z0-9 ]", " ", t)
+                    tok = re.sub(r"\s+", " ", tok).strip()
+                    if f" {tok} " in hay:
+                        return "VO2MAX" if t == "VO2 MAX" else t
+        return "—"
+
+    df["training_type"] = df.apply(_match_type, axis=1)
     return df
 
 
@@ -177,8 +211,11 @@ def load_data():
     df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
     df["tsb"] = df["ctl"] - df["atl"]
 
-    df["w_per_kg"]    = df["power_avg"] / df["weight"]
-    df["efficiency"]  = np.where(df["hr_avg"] > 0, df["power_avg"] / df["hr_avg"], np.nan)
+    # Use normalized power (NP), not average power, for W/kg and efficiency.
+    # Avg power is diluted by recovery valleys between intervals and is
+    # misleading for interval-heavy rides. NP weights surges correctly.
+    df["w_per_kg"]    = df["power_np"] / df["weight"]
+    df["efficiency"]  = np.where(df["hr_avg"] > 0, df["power_np"] / df["hr_avg"], np.nan)
     df["ftp_stimulus"]= (df["if_score"] ** 2) * df["duration_h"] * 100
 
     # ── Rolling efficiency metrics ────────────────────────────────────────────
@@ -352,7 +389,7 @@ with col4:
 with col5:
     wkg_s   = df_all["w_per_kg"].dropna()
     wkg_val = wkg_s.tail(10).mean() if len(wkg_s) >= 10 else wkg_s.mean()
-    st.metric("W/kg (10-session avg)", f"{wkg_val:.2f}")
+    st.metric("W/kg (NP, 10-session avg)", f"{wkg_val:.2f}")
 
 st.markdown(
     f'<div class="state-box" style="background:{state_color}22; '
@@ -694,7 +731,7 @@ with col1:
         text=[f"{w:.0f}W" for w in pc_df["watts"]],
         textposition="top center", name="Best Power (W)"))
     fig_pc.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
-                      annotation_text="Current FTP (235W)")
+                      annotation_text="Current FTP (240W)")
     fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"],
                       annotation_text="Target FTP (275W)", opacity=0.4)
     fig_pc.update_layout(title="Power Curve — Best Sustained Watts",
@@ -710,8 +747,8 @@ with col2:
                       for w in pc_df["wkg"]],
         text=[f"{w:.2f}" for w in pc_df["wkg"]],
         textposition="outside", opacity=0.85))
-    fig_wkg_curve.add_hline(y=4.12, line_dash="dot", line_color=C["yellow"],
-                              annotation_text="Current FTP (4.12 W/kg)")
+    fig_wkg_curve.add_hline(y=4.21, line_dash="dot", line_color=C["yellow"],
+                              annotation_text="Current FTP (4.21 W/kg)")
     fig_wkg_curve.add_hline(y=4.82, line_dash="dot", line_color=C["green"],
                               annotation_text="Target (4.82 W/kg)", opacity=0.4)
     fig_wkg_curve.update_layout(title="W/kg at Each Duration — 57kg Climber",
@@ -750,7 +787,7 @@ with col1:
                             line_color=C["red"], opacity=0.7,
                             annotation_text="Surgery Jun 2025")
     fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
-                            annotation_text="Current FTP (235W)")
+                            annotation_text="Current FTP (240W)")
     fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"],
                             annotation_text="Pre-accident FTP (275W)", opacity=0.4)
     fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
@@ -932,8 +969,8 @@ with col1:
     fig_wkg.add_trace(go.Scatter(x=monthly["date"], y=monthly["max_wkg"],
         mode="lines", name="Max W/kg",
         line=dict(color=C["accent"], width=1.5, dash="dash"), opacity=0.6))
-    fig_wkg.add_hline(y=4.12, line_dash="dot", line_color=C["yellow"],
-                       annotation_text="Current FTP target (4.12 W/kg)")
+    fig_wkg.add_hline(y=4.21, line_dash="dot", line_color=C["yellow"],
+                       annotation_text="Current FTP target (4.21 W/kg)")
     fig_wkg.add_hline(y=4.82, line_dash="dot", line_color=C["purple"],
                        annotation_text="Pre-accident target (4.82 W/kg)", opacity=0.4)
     fig_wkg.update_layout(title="Monthly W/kg Trend", height=350, **PLOTLY_LAYOUT)
