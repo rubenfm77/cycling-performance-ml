@@ -152,8 +152,28 @@ def _fetch_from_api() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_data():
+    # Column rename map shared by every Excel source
+    excel_rename = {
+        "Activity Date":          "date",
+        "TRAINING_TYPE":          "training_type",
+        "TSS":                    "tss",
+        "IF":                     "if_score",
+        "PowerAverage":           "power_avg",
+        "Weighted Average Power": "power_np",
+        "PowerMax":               "power_max",
+        "TimeTotalInHours":       "duration_h",
+        "HeartRateAverage":       "hr_avg",
+        "WEIGHT_KG":              "weight",
+        "Elevation Gain":         "elevation",
+        "DistanceInMeters":       "distance_m",
+        "Average Cadence":        "cadence",
+        "Average Temperature":    "temp_avg",
+        "Variability":            "variability",
+    }
+
     df = None
-    # Try local files first (your PC)
+    # ── Source 1: local files (your PC) ───────────────────────────────────────
+    # intervals_api.py fetches from the API and writes combined_training_data.csv
     paths = ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]
     for p in paths:
         if Path(p).exists():
@@ -161,25 +181,10 @@ def load_data():
                 df = pd.read_csv(p)
             else:
                 df = pd.read_excel(p)
-                df = df.rename(columns={
-                    "Activity Date":          "date",
-                    "TRAINING_TYPE":          "training_type",
-                    "TSS":                    "tss",
-                    "IF":                     "if_score",
-                    "PowerAverage":           "power_avg",
-                    "Weighted Average Power": "power_np",
-                    "PowerMax":               "power_max",
-                    "TimeTotalInHours":       "duration_h",
-                    "HeartRateAverage":       "hr_avg",
-                    "WEIGHT_KG":              "weight",
-                    "Elevation Gain":         "elevation",
-                    "DistanceInMeters":       "distance_m",
-                    "Average Cadence":        "cadence",
-                    "Average Temperature":    "temp_avg",
-                    "Variability":            "variability",
-                })
+                df = df.rename(columns=excel_rename)
             break
-    # Fallback: fetch live from Intervals.icu API (Streamlit Cloud)
+
+    # ── Source 2: live Intervals.icu API (Streamlit Cloud, no local CSV) ──────
     if df is None or len(df) == 0:
         df = _fetch_from_api()
     if df is None or len(df) == 0:
@@ -553,7 +558,21 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 # NORWEGIAN METHOD COMPLIANCE
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🇳🇴 Norwegian Method Compliance")
+st.markdown(
+    '<h2><span style="display:inline-block;width:1.1em;height:0.8em;'
+    'position:relative;vertical-align:-0.05em;margin-right:0.35em;'
+    'background:#ba0c2f;border-radius:2px;overflow:hidden;">'
+    '<span style="position:absolute;left:0.34em;top:0;width:0.18em;height:100%;'
+    'background:#fff;"></span>'
+    '<span style="position:absolute;left:0;top:0.31em;width:100%;height:0.18em;'
+    'background:#fff;"></span>'
+    '<span style="position:absolute;left:0.39em;top:0;width:0.08em;height:100%;'
+    'background:#00205b;"></span>'
+    '<span style="position:absolute;left:0;top:0.36em;width:100%;height:0.08em;'
+    'background:#00205b;"></span>'
+    '</span>Norwegian Method Compliance</h2>',
+    unsafe_allow_html=True,
+)
 st.caption(
     "Double threshold: 2 sessions/week at true threshold (IF ≥ 0.85). "
     "Avoid Z3 drift (IF 0.75-0.85). Keep Z2 pure (IF < 0.75). No VO2max unless specifically planned."
