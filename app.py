@@ -806,7 +806,7 @@ else:
         fig_pc.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
             line=dict(color=C["green"], width=2, dash="dot"),
             name="Target FTP (275W)"))
-        fig_pc.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
+        fig_pc.update_xaxes(type="log", tickvals=_tick_vals, ticktext=_tick_text)
         fig_pc.update_layout(title="Power Curve — Best Mean-Maximal Power",
             height=380, showlegend=True,
             legend=dict(x=1, y=1, xanchor="right", yanchor="top",
