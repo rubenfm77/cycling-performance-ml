@@ -819,7 +819,7 @@ else:
                           else C["yellow"] if w >= 3.5 else C["accent"]
                           for w in pc_df["wkg"]],
             text=[f"{w:.2f}" for w in pc_df["wkg"]],
-            textposition="outside", opacity=0.85))
+            textposition="outside", opacity=0.85, showlegend=False))
         fig_wkg_curve.add_hline(y=_ftp_wkg, line_dash="dot", line_color=C["yellow"])
         fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"], opacity=0.4)
         # Invisible traces so reference lines appear in the top-right legend
