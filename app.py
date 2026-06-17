@@ -219,8 +219,12 @@ def load_data():
     # Use normalized power (NP), not average power, for W/kg and efficiency.
     # Avg power is diluted by recovery valleys between intervals and is
     # misleading for interval-heavy rides. NP weights surges correctly.
+    # For API-sourced rows power_np is often null (icu_normalized_watts not
+    # always present); fall back to power_avg so the efficiency chart isn't
+    # blank for recent sessions.
     df["w_per_kg"]    = df["power_np"] / df["weight"]
-    df["efficiency"]  = np.where(df["hr_avg"] > 0, df["power_np"] / df["hr_avg"], np.nan)
+    _pwr_for_eff      = df["power_np"].fillna(df["power_avg"])
+    df["efficiency"]  = np.where(df["hr_avg"] > 0, _pwr_for_eff / df["hr_avg"], np.nan)
     df["ftp_stimulus"]= (df["if_score"] ** 2) * df["duration_h"] * 100
 
     # ── Rolling efficiency metrics ────────────────────────────────────────────
@@ -782,6 +786,7 @@ else:
         fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"],
                                   annotation_text=f"Target ({_tgt_wkg} W/kg)", opacity=0.4)
         fig_wkg_curve.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
+        fig_wkg_curve.update_yaxes(range=[0, 13])
         fig_wkg_curve.update_layout(title=f"W/kg at Each Duration — {_WEIGHT}kg Climber",
             height=380, **PLOTLY_LAYOUT)
         st.plotly_chart(fig_wkg_curve, use_container_width=True)

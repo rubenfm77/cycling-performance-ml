@@ -6,6 +6,7 @@ Merges with historical Excel data into a unified dataset.
 """
 
 import os
+import re
 import requests
 import pandas as pd
 import numpy as np
@@ -54,6 +55,7 @@ def fetch_activities(days_back: int = 365) -> pd.DataFrame:
     rename_map = {
         "start_date_local":       "date",
         "name":                   "activity_name",
+        "description":            "icu_description",
         "type":                   "activity_type",
         "moving_time":            "duration_secs",
         "distance":               "distance_m",
@@ -187,6 +189,51 @@ def merge_with_historical(
     if not api_df.empty and "date" in api_df.columns:
         api_dates = set(api_df["date"].astype(str))
         hist_filtered = hist[~hist["date"].astype(str).isin(api_dates)]
+
+        api_df = api_df.copy()
+
+        # ── Label source 1: the Intervals.icu Description field ───────────────
+        # You type the training type (e.g. "END", "FTP", "VO2MAX") into the
+        # activity Description in Intervals.icu. The API returns it as
+        # icu_description. We match any known label as a standalone word.
+        KNOWN_TYPES = [
+            "AEROBIC BASE", "VO2MAX", "VO2 MAX", "Q-I INTERVALS", "FATMAX",
+            "PIRAMIDAL", "BILLAT", "TORQUE", "TEMPO", "END", "FTP", "SST",
+        ]
+
+        def _label_from_text(text) -> "str | float":
+            if not isinstance(text, str) or not text.strip():
+                return np.nan
+            hay = " " + re.sub(r"[^A-Z0-9 ]", " ", text.upper())
+            hay = re.sub(r"\s+", " ", hay) + " "
+            for t in sorted(KNOWN_TYPES, key=len, reverse=True):
+                tok = re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]", " ", t)).strip()
+                if f" {tok} " in hay:
+                    return "VO2MAX" if t == "VO2 MAX" else t
+            return np.nan
+
+        if "icu_description" in api_df.columns:
+            api_df["training_type"] = api_df["icu_description"].apply(_label_from_text)
+        else:
+            api_df["training_type"] = np.nan
+
+        # ── Label source 2: fall back to the historical Excel label by date ───
+        if "training_type" in hist.columns:
+            label_by_date = (
+                hist.dropna(subset=["training_type"])
+                    .assign(_d=hist["date"].astype(str))
+                    .drop_duplicates("_d", keep="last")
+                    .set_index("_d")["training_type"]
+            )
+            api_df["_d"] = api_df["date"].astype(str)
+            api_df["training_type"] = api_df["training_type"].fillna(
+                api_df["_d"].map(label_by_date)
+            )
+            api_df = api_df.drop(columns=["_d"])
+
+        n_desc = api_df["training_type"].notna().sum()
+        print(f"  🏷️  Labelled {n_desc}/{len(api_df)} API rows "
+              f"(Description field + historical fallback)")
     else:
         hist_filtered = hist
 
@@ -212,6 +259,111 @@ def merge_with_historical(
     return combined
 
 
+def fetch_power_curve(days_back: int = 365) -> pd.DataFrame:
+    """
+    Fetch the real mean-maximal power (MMP) curve from Intervals.icu.
+
+    This is the *true* power curve — best power sustained for each duration
+    across all rides — not the broken whole-ride-NP approximation. The endpoint
+    is /athlete/{id}/power-curves. The response shape can vary slightly between
+    Intervals.icu versions, so we parse defensively and fall back to an empty
+    DataFrame (the app then hides the chart) rather than crash.
+    """
+    print("  Fetching power curve (MMP)...")
+    # Standard durations we want to display, in seconds
+    want = {
+        5:    "5s",
+        60:   "1 min",
+        300:  "5 min",
+        600:  "10 min",
+        1200: "20 min",
+        1800: "30 min",
+        3600: "60 min",
+    }
+    date_from = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    date_to   = datetime.now().strftime("%Y-%m-%d")
+
+    data = None
+    for params in (
+        {"curves": "all", "type": "Ride", "newest": date_to, "oldest": date_from},
+        {"type": "Ride", "newest": date_to, "oldest": date_from},
+        {"type": "Ride"},
+    ):
+        try:
+            data = _get(f"athlete/{ATHLETE_ID}/power-curves", params=params)
+            if data:
+                break
+        except Exception as e:
+            print(f"    power-curves attempt failed ({params}): {e}")
+            data = None
+
+    if not data:
+        print("  ⚠️  No power-curve data returned — chart will be hidden")
+        return pd.DataFrame()
+
+    # The response is typically a list of curve objects, each with parallel
+    # arrays "secs" (durations) and "values"/"watts" (best power at each).
+    # Pick the curve with the most coverage and extract our target durations.
+    def _extract(curve):
+        secs = curve.get("secs") or curve.get("seconds") or curve.get("x")
+        vals = (curve.get("values") or curve.get("watts")
+                or curve.get("y") or curve.get("power"))
+        if not secs or not vals or len(secs) != len(vals):
+            return None
+        lookup = dict(zip(secs, vals))
+        rows = []
+        for sec, label in want.items():
+            # nearest available duration within 10%
+            best = None
+            for s in secs:
+                if abs(s - sec) <= max(2, sec * 0.10):
+                    if best is None or abs(s - sec) < abs(best - sec):
+                        best = s
+            w = lookup.get(best) if best is not None else None
+            if w is not None and w > 0:
+                rows.append({"secs": sec, "duration": label,
+                             "watts": float(w), "wkg": float(w) / WEIGHT_KG})
+        return rows
+
+    # The real Intervals.icu response wraps the curves under "list":
+    #   {"list": [{"secs": [...], "values": [...], "watts": [...]}, ...]}
+    # Older/other shapes may return a bare list or a single dict. Handle all.
+    if isinstance(data, dict) and "list" in data and isinstance(data["list"], list):
+        curves = data["list"]
+    elif isinstance(data, list):
+        curves = data
+    else:
+        curves = [data]
+
+    best_rows = []
+    for c in curves:
+        if not isinstance(c, dict):
+            continue
+        r = _extract(c)
+        if r and len(r) > len(best_rows):
+            best_rows = r
+
+    if not best_rows:
+        print("  ⚠️  Power-curve response shape not recognised — chart hidden")
+        return pd.DataFrame()
+
+    pc = pd.DataFrame(best_rows).sort_values("secs").reset_index(drop=True)
+
+    # Power meter over-reading correction (Oct 2024–Dec 2025).
+    # The MMP endpoint returns aggregate bests without per-effort dates, so we
+    # can't selectively correct only the affected efforts. Since the 365-day
+    # fetch window overlaps heavily with the affected period and inflated efforts
+    # would always beat clean ones in a best-of ranking, apply 0.855 to the
+    # whole curve to bring it in line with the corrected session data.
+    POWER_CORRECTION = 0.855
+    pc["watts"] = (pc["watts"] * POWER_CORRECTION).round(1)
+    pc["wkg"]   = (pc["watts"] / WEIGHT_KG).round(4)
+
+    print(f"  ✅ Power curve: {len(pc)} durations "
+          f"({pc['watts'].min():.0f}–{pc['watts'].max():.0f}W, correction={POWER_CORRECTION})")
+    return pc
+
+
 def save_combined(df: pd.DataFrame,
                   path: str = "data/combined_training_data.csv") -> None:
     df.to_csv(path, index=False)
@@ -232,6 +384,7 @@ def run_pipeline(days_back: int = 365) -> pd.DataFrame:
 
     activities = fetch_activities(days_back)
     wellness   = fetch_wellness(days_back)
+    power_curve = fetch_power_curve(days_back)
 
     excel_path = "data/JOIN_STRAVA_TP.xlsx"
     if Path(excel_path).exists():
@@ -241,6 +394,10 @@ def run_pipeline(days_back: int = 365) -> pd.DataFrame:
         print("  ⚠️  No Excel file found — using API data only")
 
     save_combined(combined)
+
+    if not power_curve.empty:
+        power_curve.to_csv("data/power_curve.csv", index=False)
+        print(f"  ✅ Power curve saved → data/power_curve.csv")
 
     if not wellness.empty:
         wellness.to_csv("data/wellness_data.csv", index=False)
