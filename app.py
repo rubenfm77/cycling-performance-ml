@@ -834,40 +834,16 @@ with col1:
         y=monthly_ftp["ftp_est"].rolling(3).mean(),
         mode="lines", name="3-month trend",
         line=dict(color=C["accent"], width=2, dash="dash")))
-    # Reference lines — annotation kwargs removed; labels placed explicitly below
+    # Reference lines — no in-plot text; labels live in the caption below
     fig_ftp_prog.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
                             line_color=C["red"], opacity=0.7)
     fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"])
     fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
-    # All three labels use pure paper coordinates (yref="paper") so their
-    # vertical positions are fixed pixel fractions of the plot area regardless
-    # of the y-axis data scale.  Chart: height=400, margins t=40 b=40 → 320px
-    # plot area.  Row A (y=0.97) and Row B (y=0.72) are 80px apart; Surgery
-    # sits on Row A at the LEFT so it cannot collide with the right-side labels.
-    fig_ftp_prog.add_annotation(   # Row A RIGHT — Pre-accident FTP (275W green line)
-        xref="paper", x=0.98,
-        yref="paper", y=0.97,
-        text="Pre-accident FTP (275W)",
-        xanchor="right", yanchor="top",
-        showarrow=False, font=dict(color=C["green"], size=11)
-    )
-    fig_ftp_prog.add_annotation(   # Row A LEFT — Surgery marker (red vline)
-        xref="paper", x=0.02,
-        yref="paper", y=0.97,
-        text="▲ Surgery Jun 2025",
-        xanchor="left", yanchor="top",
-        showarrow=False, font=dict(color=C["red"], size=11)
-    )
-    fig_ftp_prog.add_annotation(   # Row B RIGHT — Current FTP (235W yellow line)
-        xref="paper", x=0.98,
-        yref="paper", y=0.72,
-        text="Current FTP (240W)",
-        xanchor="right", yanchor="top",
-        showarrow=False, font=dict(color=C["yellow"], size=11)
-    )
     fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
         height=400, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_ftp_prog, use_container_width=True)
+    st.caption("Reference lines:  yellow ── Current FTP 240W  ·  "
+               "green ── Pre-accident FTP 275W  ·  red | Surgery Jun 2025")
 
 with col2:
     annual_ftp = (
@@ -949,8 +925,9 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## 📊 This Year vs Same Period Last Year")
 
-current_year = datetime.now().year
-today_md     = datetime.now().strftime("%m-%d")
+current_year  = datetime.now().year
+current_month = datetime.now().month
+today_md      = datetime.now().strftime("%m-%d")
 this_yr      = df_all[df_all["year"] == current_year]
 last_yr      = df_all[(df_all["year"] == current_year-1) &
                        (df_all["date"].dt.strftime("%m-%d") <= today_md)]
@@ -990,8 +967,9 @@ for col, (label, tv, lv, unit, dec) in zip(
 col1, col2 = st.columns(2)
 with col1:
     mc = [{"month": pd.Timestamp(f"{current_year}-{m:02d}-01").strftime("%b"),
-           "this_year": safe_sum(df_all[(df_all["year"]==current_year) &
-                                        (df_all["date"].dt.month==m)]["tss"]),
+           "this_year": (safe_sum(df_all[(df_all["year"]==current_year) &
+                                         (df_all["date"].dt.month==m)]["tss"])
+                         if m <= current_month else np.nan),
            "last_year": safe_sum(df_all[(df_all["year"]==current_year-1) &
                                         (df_all["date"].dt.month==m)]["tss"])}
           for m in range(1, 13)]
@@ -1008,8 +986,9 @@ with col1:
 
 with col2:
     wc = [{"month": pd.Timestamp(f"{current_year}-{m:02d}-01").strftime("%b"),
-           "this_year": safe_mean(df_all[(df_all["year"]==current_year) &
-                                          (df_all["date"].dt.month==m)]["w_per_kg"]),
+           "this_year": (safe_mean(df_all[(df_all["year"]==current_year) &
+                                           (df_all["date"].dt.month==m)]["w_per_kg"])
+                         if m <= current_month else np.nan),
            "last_year": safe_mean(df_all[(df_all["year"]==current_year-1) &
                                           (df_all["date"].dt.month==m)]["w_per_kg"])}
           for m in range(1, 13)]
