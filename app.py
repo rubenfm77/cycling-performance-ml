@@ -229,8 +229,11 @@ def load_data():
     # For API-sourced rows power_np is often null (icu_normalized_watts not
     # always present); fall back to power_avg so the efficiency chart isn't
     # blank for recent sessions.
-    df["w_per_kg"]    = df["power_np"] / df["weight"]
-    _pwr_for_eff      = df["power_np"].fillna(df["power_avg"])
+    # power_np is null for API rows without a power meter recording; fall back
+    # to power_avg so W/kg and the year-comparison metric show a real number.
+    _pwr_for_wkg      = df["power_np"].fillna(df["power_avg"])
+    df["w_per_kg"]    = _pwr_for_wkg / df["weight"]
+    _pwr_for_eff      = _pwr_for_wkg
     df["efficiency"]  = np.where(df["hr_avg"] > 0, _pwr_for_eff / df["hr_avg"], np.nan)
     df["ftp_stimulus"]= (df["if_score"] ** 2) * df["duration_h"] * 100
 
@@ -831,29 +834,35 @@ with col1:
         y=monthly_ftp["ftp_est"].rolling(3).mean(),
         mode="lines", name="3-month trend",
         line=dict(color=C["accent"], width=2, dash="dash")))
-    # Reference lines — no annotation kwargs; labels added separately below
+    # Reference lines — annotation kwargs removed; labels placed explicitly below
     fig_ftp_prog.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
                             line_color=C["red"], opacity=0.7)
     fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"])
     fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
-    # Explicit annotations: xref/yref + yshift give pixel-level control so
-    # labels cannot collide regardless of Plotly's automatic placement.
-    fig_ftp_prog.add_annotation(         # "Pre-accident FTP" — above the 275W line, right edge
-        xref="paper", x=0.99, yref="y", y=275,
+    # All three labels use pure paper coordinates (yref="paper") so their
+    # vertical positions are fixed pixel fractions of the plot area regardless
+    # of the y-axis data scale.  Chart: height=400, margins t=40 b=40 → 320px
+    # plot area.  Row A (y=0.97) and Row B (y=0.72) are 80px apart; Surgery
+    # sits on Row A at the LEFT so it cannot collide with the right-side labels.
+    fig_ftp_prog.add_annotation(   # Row A RIGHT — Pre-accident FTP (275W green line)
+        xref="paper", x=0.98,
+        yref="paper", y=0.97,
         text="Pre-accident FTP (275W)",
-        xanchor="right", yanchor="bottom", yshift=7,
+        xanchor="right", yanchor="top",
         showarrow=False, font=dict(color=C["green"], size=11)
     )
-    fig_ftp_prog.add_annotation(         # "Surgery" — top of chart, left of the vline
-        xref="x", x=pd.Timestamp("2025-06-01"), yref="paper", y=0.99,
-        text="Surgery Jun 2025",
-        xanchor="right", yanchor="top", xshift=-8,
+    fig_ftp_prog.add_annotation(   # Row A LEFT — Surgery marker (red vline)
+        xref="paper", x=0.02,
+        yref="paper", y=0.97,
+        text="▲ Surgery Jun 2025",
+        xanchor="left", yanchor="top",
         showarrow=False, font=dict(color=C["red"], size=11)
     )
-    fig_ftp_prog.add_annotation(         # "Current FTP" — below the 235W line, right edge
-        xref="paper", x=0.99, yref="y", y=235,
+    fig_ftp_prog.add_annotation(   # Row B RIGHT — Current FTP (235W yellow line)
+        xref="paper", x=0.98,
+        yref="paper", y=0.72,
         text="Current FTP (240W)",
-        xanchor="right", yanchor="top", yshift=-7,
+        xanchor="right", yanchor="top",
         showarrow=False, font=dict(color=C["yellow"], size=11)
     )
     fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
