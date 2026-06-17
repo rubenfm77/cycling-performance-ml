@@ -789,7 +789,8 @@ else:
             line=dict(color=C["purple"], width=3),
             marker=dict(size=10, color=C["purple"]),
             text=[""] + [f"{w:.0f}W" for w in pc_df["watts"].iloc[1:]],
-            textposition="top center",
+            textposition=["top center" if i % 2 == 0 else "bottom center"
+                          for i in range(len(pc_df))],
             name="Best Power (W)"))
         fig_pc.add_annotation(
             xref="paper", x=0, xanchor="left",
