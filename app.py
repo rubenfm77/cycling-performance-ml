@@ -792,9 +792,10 @@ else:
             textposition="top center",
             name="Best Power (W)"))
         fig_pc.add_annotation(
-            x=pc_df["secs"].iloc[0], y=pc_df["watts"].iloc[0],
+            xref="paper", x=0, xanchor="left",
+            yref="y", y=pc_df["watts"].iloc[0],
             text=f"{pc_df['watts'].iloc[0]:.0f}W",
-            showarrow=False, xshift=-40, yshift=14,
+            showarrow=False, yshift=14,
             font=dict(color=C["purple"], size=12))
         fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"])
         fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
