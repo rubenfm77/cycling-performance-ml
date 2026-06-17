@@ -831,20 +831,31 @@ with col1:
         y=monthly_ftp["ftp_est"].rolling(3).mean(),
         mode="lines", name="3-month trend",
         line=dict(color=C["accent"], width=2, dash="dash")))
+    # Reference lines — no annotation kwargs; labels added separately below
     fig_ftp_prog.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
-                            line_color=C["red"], opacity=0.7,
-                            annotation_text="Surgery Jun 2025",
-                            annotation_position="top left",
-                            annotation_font_color=C["red"])
-    fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
-                            annotation_text="Current FTP (240W)",
-                            annotation_position="bottom right",
-                            annotation_font_color=C["yellow"])
-    fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"],
-                            annotation_text="Pre-accident FTP (275W)",
-                            annotation_position="top right",
-                            annotation_font_color=C["green"],
-                            opacity=0.4)
+                            line_color=C["red"], opacity=0.7)
+    fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"])
+    fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
+    # Explicit annotations: xref/yref + yshift give pixel-level control so
+    # labels cannot collide regardless of Plotly's automatic placement.
+    fig_ftp_prog.add_annotation(         # "Pre-accident FTP" — above the 275W line, right edge
+        xref="paper", x=0.99, yref="y", y=275,
+        text="Pre-accident FTP (275W)",
+        xanchor="right", yanchor="bottom", yshift=7,
+        showarrow=False, font=dict(color=C["green"], size=11)
+    )
+    fig_ftp_prog.add_annotation(         # "Surgery" — top of chart, left of the vline
+        xref="x", x=pd.Timestamp("2025-06-01"), yref="paper", y=0.99,
+        text="Surgery Jun 2025",
+        xanchor="right", yanchor="top", xshift=-8,
+        showarrow=False, font=dict(color=C["red"], size=11)
+    )
+    fig_ftp_prog.add_annotation(         # "Current FTP" — below the 235W line, right edge
+        xref="paper", x=0.99, yref="y", y=235,
+        text="Current FTP (240W)",
+        xanchor="right", yanchor="top", yshift=-7,
+        showarrow=False, font=dict(color=C["yellow"], size=11)
+    )
     fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
         height=400, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_ftp_prog, use_container_width=True)
