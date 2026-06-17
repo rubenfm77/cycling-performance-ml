@@ -789,7 +789,8 @@ else:
             line=dict(color=C["purple"], width=3),
             marker=dict(size=10, color=C["purple"]),
             text=[f"{w:.0f}W" for w in pc_df["watts"]],
-            textposition="top center", name="Best Power (W)"))
+            textposition=["top left"] + ["top center"] * (len(pc_df) - 1),
+            name="Best Power (W)"))
         fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"])
         fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
         # Invisible traces so reference lines appear in the top-right legend
