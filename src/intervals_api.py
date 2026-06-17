@@ -97,6 +97,15 @@ def fetch_activities(days_back: int = 365) -> pd.DataFrame:
     if "power_np" not in df.columns and "power_np_icu" in df.columns:
         df["power_np"] = df["power_np_icu"]
 
+    # icu_eftp is null for this athlete; fall back to icu_rolling_ftp, which
+    # is the model's rolling estimated FTP (distinct from the manually-set FTP).
+    if "icu_rolling_ftp" in df.columns:
+        eftp_rolling = pd.to_numeric(df["icu_rolling_ftp"], errors="coerce")
+        if "eftp" not in df.columns or pd.to_numeric(df["eftp"], errors="coerce").isna().all():
+            df["eftp"] = eftp_rolling
+        else:
+            df["eftp"] = pd.to_numeric(df["eftp"], errors="coerce").fillna(eftp_rolling)
+
     if "power_avg" in df.columns:
         df["w_per_kg"] = pd.to_numeric(df["power_avg"], errors="coerce") / WEIGHT_KG
     else:

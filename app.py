@@ -212,6 +212,13 @@ def load_data():
     df["temp_avg"] = pd.to_numeric(df["temp_avg"], errors="coerce") if "temp_avg" in df.columns else np.nan
     df["weight"]   = pd.to_numeric(df["weight"],   errors="coerce").fillna(57.0) if "weight" in df.columns else pd.Series([57.0] * len(df))
 
+    # eFTP: icu_eftp is null for this athlete; populate from icu_rolling_ftp
+    # (the Intervals.icu rolling estimate, distinct from the manually-set FTP)
+    if "icu_rolling_ftp" in df.columns:
+        _eftp = pd.to_numeric(df["icu_rolling_ftp"], errors="coerce")
+        if "eftp" not in df.columns or _eftp.notna().sum() > pd.to_numeric(df.get("eftp"), errors="coerce").notna().sum():
+            df["eftp"] = _eftp
+
     df["ctl"] = df["tss"].ewm(span=42, adjust=False).mean()
     df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
     df["tsb"] = df["ctl"] - df["atl"]
@@ -429,7 +436,10 @@ st.caption(
     "These metrics are not."
 )
 
-recent_eff = df_all[df_all["efficiency"].notna()].tail(60).copy()
+_eff_cutoff = pd.Timestamp.now() - pd.Timedelta(days=90)
+recent_eff  = df_all[(df_all["efficiency"].notna()) & (df_all["date"] >= _eff_cutoff)].copy()
+if len(recent_eff) < 10:
+    recent_eff = df_all[df_all["efficiency"].notna()].tail(35).copy()
 
 col1, col2, col3 = st.columns(3)
 
@@ -823,11 +833,18 @@ with col1:
         line=dict(color=C["accent"], width=2, dash="dash")))
     fig_ftp_prog.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
                             line_color=C["red"], opacity=0.7,
-                            annotation_text="Surgery Jun 2025")
+                            annotation_text="Surgery Jun 2025",
+                            annotation_position="top left",
+                            annotation_font_color=C["red"])
     fig_ftp_prog.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
-                            annotation_text="Current FTP (240W)")
+                            annotation_text="Current FTP (240W)",
+                            annotation_position="bottom right",
+                            annotation_font_color=C["yellow"])
     fig_ftp_prog.add_hline(y=275, line_dash="dot", line_color=C["green"],
-                            annotation_text="Pre-accident FTP (275W)", opacity=0.4)
+                            annotation_text="Pre-accident FTP (275W)",
+                            annotation_position="top right",
+                            annotation_font_color=C["green"],
+                            opacity=0.4)
     fig_ftp_prog.update_layout(title="Monthly FTP Progression 2019–2026",
         height=400, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_ftp_prog, use_container_width=True)
