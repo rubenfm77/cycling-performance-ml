@@ -774,9 +774,11 @@ else:
         _ftp_wkg = round(240 / _WEIGHT, 2)
         _tgt_wkg = round(275 / _WEIGHT, 2)
         fig_wkg_curve = go.Figure()
+        # Categorical x so all bars are evenly spaced regardless of duration
         fig_wkg_curve.add_trace(go.Bar(
-            x=pc_df["secs"], y=pc_df["wkg"],
-            marker_color=[C["red"] if w >= 5.0 else C["orange"] if w >= 4.0
+            x=pc_df["duration"], y=pc_df["wkg"],
+            marker_color=[C["purple"] if w >= 8.0 else C["red"] if w >= 5.0
+                          else C["orange"] if w >= 4.0
                           else C["yellow"] if w >= 3.5 else C["accent"]
                           for w in pc_df["wkg"]],
             text=[f"{w:.2f}" for w in pc_df["wkg"]],
@@ -785,8 +787,8 @@ else:
                                   annotation_text=f"Current FTP ({_ftp_wkg} W/kg)")
         fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"],
                                   annotation_text=f"Target ({_tgt_wkg} W/kg)", opacity=0.4)
-        fig_wkg_curve.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
-        fig_wkg_curve.update_yaxes(range=[0, 13])
+        _y_max = round(pc_df["wkg"].max() * 1.15, 1)
+        fig_wkg_curve.update_yaxes(range=[0, _y_max])
         fig_wkg_curve.update_layout(title=f"W/kg at Each Duration — {_WEIGHT}kg Climber",
             height=380, **PLOTLY_LAYOUT)
         st.plotly_chart(fig_wkg_curve, use_container_width=True)
@@ -1086,6 +1088,74 @@ st.dataframe(recent, use_container_width=True, height=450,
         "W/kg": st.column_config.NumberColumn("W/kg", format="%.2f"),
         "Quality": st.column_config.ProgressColumn("Quality", min_value=0, max_value=100, format="%.0f"),
     })
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WELLNESS & HRV
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 💚 Wellness & HRV")
+st.caption("HRV and resting HR are the earliest objective signs of accumulated fatigue — "
+           "they respond before CTL/ATL do.")
+
+has_hrv = (
+    not wellness.empty
+    and "hrv" in wellness.columns
+    and wellness["hrv"].notna().sum() > 5
+)
+has_rhr = (
+    not wellness.empty
+    and "resting_hr" in wellness.columns
+    and wellness["resting_hr"].notna().sum() > 5
+    and float(wellness["resting_hr"].std()) > 0
+)
+
+if has_hrv or has_rhr:
+    wellness_recent = wellness[wellness["date"] >= pd.Timestamp(cutoff)]
+    col1, col2 = st.columns(2)
+    with col1:
+        if has_hrv:
+            fig_hrv = go.Figure()
+            fig_hrv.add_trace(go.Scatter(
+                x=wellness_recent["date"],
+                y=wellness_recent["hrv"],
+                mode="lines+markers",
+                line=dict(color=C["green"], width=2),
+                name="HRV",
+                fill="tozeroy",
+                fillcolor="rgba(63,185,80,0.1)"
+            ))
+            fig_hrv.update_layout(
+                title="Heart Rate Variability (HRV) — Higher = More Recovered",
+                height=300, **PLOTLY_LAYOUT
+            )
+            st.plotly_chart(fig_hrv, use_container_width=True)
+        else:
+            st.info("No HRV data in wellness_data.csv yet. Log HRV daily in Intervals.icu.")
+    with col2:
+        if has_rhr:
+            fig_rhr = go.Figure()
+            fig_rhr.add_trace(go.Scatter(
+                x=wellness_recent["date"],
+                y=wellness_recent["resting_hr"],
+                mode="lines+markers",
+                line=dict(color=C["orange"], width=2),
+                name="Resting HR",
+                fill="tozeroy",
+                fillcolor="rgba(240,136,62,0.08)"
+            ))
+            fig_rhr.update_layout(
+                title="Resting Heart Rate — Lower = More Recovered",
+                height=300, **PLOTLY_LAYOUT
+            )
+            st.plotly_chart(fig_rhr, use_container_width=True)
+        else:
+            st.info("No resting HR data in wellness_data.csv yet. Log it daily in Intervals.icu.")
+else:
+    st.info(
+        "No HRV or resting heart rate data logged yet. "
+        "Enter these daily in Intervals.icu (Wellness section) to track recovery trends here."
+    )
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
