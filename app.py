@@ -208,6 +208,11 @@ def load_data():
 
     df["tss"] = df["tss"].fillna(0)
 
+    # Some API rows return icu_intensity as a percentage (e.g. 77.0) rather
+    # than the correct decimal (0.77).  Normalise anything > 2 by ÷100.
+    pct_mask = df["if_score"].notna() & (df["if_score"] > 2.0)
+    df.loc[pct_mask, "if_score"] = df.loc[pct_mask, "if_score"] / 100
+
     # Optional columns
     df["temp_avg"] = pd.to_numeric(df["temp_avg"], errors="coerce") if "temp_avg" in df.columns else np.nan
     df["weight"]   = pd.to_numeric(df["weight"],   errors="coerce").fillna(57.0) if "weight" in df.columns else pd.Series([57.0] * len(df))

@@ -120,6 +120,13 @@ def fetch_activities(days_back: int = 365) -> pd.DataFrame:
         df["tsb"] = pd.to_numeric(df["ctl"], errors="coerce") - \
                     pd.to_numeric(df["atl"], errors="coerce")
 
+    # icu_intensity sometimes arrives as a percentage (77.0) not a decimal (0.77)
+    if "if_score" in df.columns:
+        pct_mask = pd.to_numeric(df["if_score"], errors="coerce") > 2.0
+        df.loc[pct_mask, "if_score"] = (
+            pd.to_numeric(df.loc[pct_mask, "if_score"], errors="coerce") / 100
+        )
+
     if "if_score" in df.columns and "duration_h" in df.columns:
         i = pd.to_numeric(df["if_score"], errors="coerce")
         d = pd.to_numeric(df["duration_h"], errors="coerce")
