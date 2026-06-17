@@ -788,9 +788,14 @@ else:
             mode="lines+markers+text",
             line=dict(color=C["purple"], width=3),
             marker=dict(size=10, color=C["purple"]),
-            text=[f"{w:.0f}W" for w in pc_df["watts"]],
-            textposition=["top left"] + ["top center"] * (len(pc_df) - 1),
+            text=[""] + [f"{w:.0f}W" for w in pc_df["watts"].iloc[1:]],
+            textposition="top center",
             name="Best Power (W)"))
+        fig_pc.add_annotation(
+            x=pc_df["secs"].iloc[0], y=pc_df["watts"].iloc[0],
+            text=f"{pc_df['watts'].iloc[0]:.0f}W",
+            showarrow=False, xshift=-40, yshift=14,
+            font=dict(color=C["purple"], size=12))
         fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"])
         fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
         # Invisible traces so reference lines appear in the top-right legend
