@@ -632,17 +632,28 @@ with col2:
     fig_if_hist = go.Figure()
     fig_if_hist.add_trace(go.Histogram(
         x=if_data["if_score"], nbinsx=30,
-        marker_color=C["accent"], opacity=0.75, name="Sessions"))
-    fig_if_hist.add_vline(x=0.75, line_dash="dash", line_color=C["yellow"],
-                           annotation_text="Z2/Z3 boundary (0.75)")
-    fig_if_hist.add_vline(x=0.85, line_dash="dash", line_color=C["green"],
-                           annotation_text="Threshold start (0.85)")
-    fig_if_hist.add_vline(x=0.95, line_dash="dash", line_color=C["red"],
-                           annotation_text="VO2max (0.95)")
+        marker_color=C["accent"], opacity=0.75, name="Sessions",
+        showlegend=False))
+    fig_if_hist.add_vline(x=0.75, line_dash="dash", line_color=C["yellow"])
+    fig_if_hist.add_vline(x=0.85, line_dash="dash", line_color=C["green"])
+    fig_if_hist.add_vline(x=0.95, line_dash="dash", line_color=C["red"])
+    # Invisible traces — render as separated legend rows at top-left
+    fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+        line=dict(color=C["yellow"], width=2, dash="dash"),
+        name="0.75 — Z2/Z3 boundary"))
+    fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+        line=dict(color=C["green"], width=2, dash="dash"),
+        name="0.85 — Threshold start"))
+    fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+        line=dict(color=C["red"], width=2, dash="dash"),
+        name="0.95 — VO2max zone"))
     fig_if_hist.update_layout(
         title=f"IF Distribution — {date_range}<br>"
               f"<sup>Ideal: big spike at <0.75 (Z2) + smaller spike at 0.85-0.95 (threshold)</sup>",
-        height=350, **PLOTLY_LAYOUT
+        height=350, showlegend=True,
+        legend=dict(x=0, y=1, xanchor="left", yanchor="top",
+                    bgcolor=C["panel"], bordercolor=C["grid"]),
+        **PLOTLY_LAYOUT
     )
     st.plotly_chart(fig_if_hist, use_container_width=True)
 
