@@ -723,56 +723,68 @@ st.markdown("---")
 st.markdown("## ⚡ Power Curve & Best Efforts")
 
 col1, col2 = st.columns(2)
-with col1:
-    power_data = df_all[df_all["power_avg"] > 0].copy()
-    durations_label = ["5s sprint", "1 min", "5 min", "10 min", "20 min", "30 min", "60 min"]
-    durations_h     = [1/720, 1/60, 5/60, 10/60, 20/60, 30/60, 1.0]
-    best_efforts = []
-    for dur_h, label in zip(durations_h, durations_label):
-        tol = dur_h * 0.3
-        sub = power_data[(power_data["duration_h"] >= dur_h - tol) &
-                         (power_data["duration_h"] <= dur_h + tol)]
-        if len(sub) > 0:
-            bw = sub["power_np"].max() if "power_np" in sub.columns else sub["power_avg"].max()
-        elif label == "5s sprint" and "power_max" in power_data.columns:
-            bw = power_data["power_max"].max()
-        else:
-            cl = power_data.iloc[(power_data["duration_h"] - dur_h).abs().argsort()[:10]]
-            bw = cl["power_np"].max() if "power_np" in cl.columns else cl["power_avg"].max()
-        best_efforts.append({"duration": label, "watts": bw, "wkg": bw / 57.0})
-    pc_df = pd.DataFrame(best_efforts).dropna()
-    fig_pc = go.Figure()
-    fig_pc.add_trace(go.Scatter(
-        x=pc_df["duration"], y=pc_df["watts"],
-        mode="lines+markers+text",
-        line=dict(color=C["purple"], width=3),
-        marker=dict(size=10, color=C["purple"]),
-        text=[f"{w:.0f}W" for w in pc_df["watts"]],
-        textposition="top center", name="Best Power (W)"))
-    fig_pc.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
-                      annotation_text="Current FTP (240W)")
-    fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"],
-                      annotation_text="Target FTP (275W)", opacity=0.4)
-    fig_pc.update_layout(title="Power Curve — Best Sustained Watts",
-        height=380, **PLOTLY_LAYOUT)
-    st.plotly_chart(fig_pc, use_container_width=True)
 
-with col2:
-    fig_wkg_curve = go.Figure()
-    fig_wkg_curve.add_trace(go.Bar(
-        x=pc_df["duration"], y=pc_df["wkg"],
-        marker_color=[C["red"] if w >= 5.0 else C["orange"] if w >= 4.0
-                      else C["yellow"] if w >= 3.5 else C["accent"]
-                      for w in pc_df["wkg"]],
-        text=[f"{w:.2f}" for w in pc_df["wkg"]],
-        textposition="outside", opacity=0.85))
-    fig_wkg_curve.add_hline(y=4.21, line_dash="dot", line_color=C["yellow"],
-                              annotation_text="Current FTP (4.21 W/kg)")
-    fig_wkg_curve.add_hline(y=4.82, line_dash="dot", line_color=C["green"],
-                              annotation_text="Target (4.82 W/kg)", opacity=0.4)
-    fig_wkg_curve.update_layout(title="W/kg at Each Duration — 57kg Climber",
-        height=380, **PLOTLY_LAYOUT)
-    st.plotly_chart(fig_wkg_curve, use_container_width=True)
+# Real mean-maximal power curve, produced by intervals_api.py from the
+# Intervals.icu power-curves (MMP) endpoint and saved to data/power_curve.csv.
+# This replaces the old approximation that bucketed whole rides by their total
+# duration (which produced a flat, meaningless curve).
+pc_df = pd.DataFrame()
+_pc_path = "data/power_curve.csv"
+if Path(_pc_path).exists():
+    try:
+        pc_df = pd.read_csv(_pc_path)
+    except Exception:
+        pc_df = pd.DataFrame()
+
+if pc_df.empty or "watts" not in pc_df.columns:
+    with col1:
+        st.info(
+            "Power curve unavailable. Run `python src/intervals_api.py` to fetch "
+            "your mean-maximal power from Intervals.icu, then redeploy."
+        )
+else:
+    _WEIGHT = 56.8
+    pc_df = pc_df.sort_values("secs").reset_index(drop=True)
+    pc_df["wkg"] = pc_df["watts"] / _WEIGHT
+    _tick_vals = pc_df["secs"].tolist()
+    _tick_text = pc_df["duration"].tolist()
+    with col1:
+        fig_pc = go.Figure()
+        fig_pc.add_trace(go.Scatter(
+            x=pc_df["secs"], y=pc_df["watts"],
+            mode="lines+markers+text",
+            line=dict(color=C["purple"], width=3),
+            marker=dict(size=10, color=C["purple"]),
+            text=[f"{w:.0f}W" for w in pc_df["watts"]],
+            textposition="top center", name="Best Power (W)"))
+        fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"],
+                          annotation_text="Current FTP (240W)")
+        fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"],
+                          annotation_text="Target FTP (275W)", opacity=0.4)
+        fig_pc.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
+        fig_pc.update_layout(title="Power Curve — Best Mean-Maximal Power",
+            height=380, **PLOTLY_LAYOUT)
+        st.plotly_chart(fig_pc, use_container_width=True)
+
+    with col2:
+        _ftp_wkg = round(240 / _WEIGHT, 2)
+        _tgt_wkg = round(275 / _WEIGHT, 2)
+        fig_wkg_curve = go.Figure()
+        fig_wkg_curve.add_trace(go.Bar(
+            x=pc_df["secs"], y=pc_df["wkg"],
+            marker_color=[C["red"] if w >= 5.0 else C["orange"] if w >= 4.0
+                          else C["yellow"] if w >= 3.5 else C["accent"]
+                          for w in pc_df["wkg"]],
+            text=[f"{w:.2f}" for w in pc_df["wkg"]],
+            textposition="outside", opacity=0.85))
+        fig_wkg_curve.add_hline(y=_ftp_wkg, line_dash="dot", line_color=C["yellow"],
+                                  annotation_text=f"Current FTP ({_ftp_wkg} W/kg)")
+        fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"],
+                                  annotation_text=f"Target ({_tgt_wkg} W/kg)", opacity=0.4)
+        fig_wkg_curve.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
+        fig_wkg_curve.update_layout(title=f"W/kg at Each Duration — {_WEIGHT}kg Climber",
+            height=380, **PLOTLY_LAYOUT)
+        st.plotly_chart(fig_wkg_curve, use_container_width=True)
 
 st.markdown("---")
 
