@@ -774,13 +774,21 @@ else:
             marker=dict(size=10, color=C["purple"]),
             text=[f"{w:.0f}W" for w in pc_df["watts"]],
             textposition="top center", name="Best Power (W)"))
-        fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"],
-                          annotation_text="Current FTP (240W)")
-        fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"],
-                          annotation_text="Target FTP (275W)", opacity=0.4)
+        fig_pc.add_hline(y=240, line_dash="dot", line_color=C["yellow"])
+        fig_pc.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.4)
+        # Invisible traces so reference lines appear in the top-right legend
+        fig_pc.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+            line=dict(color=C["yellow"], width=2, dash="dot"),
+            name="Current FTP (240W)"))
+        fig_pc.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+            line=dict(color=C["green"], width=2, dash="dot"),
+            name="Target FTP (275W)"))
         fig_pc.update_xaxes(tickvals=_tick_vals, ticktext=_tick_text)
         fig_pc.update_layout(title="Power Curve — Best Mean-Maximal Power",
-            height=380, **PLOTLY_LAYOUT)
+            height=380, showlegend=True,
+            legend=dict(x=1, y=1, xanchor="right", yanchor="top",
+                        bgcolor=C["panel"], bordercolor=C["grid"]),
+            **PLOTLY_LAYOUT)
         st.plotly_chart(fig_pc, use_container_width=True)
 
     with col2:
@@ -796,14 +804,22 @@ else:
                           for w in pc_df["wkg"]],
             text=[f"{w:.2f}" for w in pc_df["wkg"]],
             textposition="outside", opacity=0.85))
-        fig_wkg_curve.add_hline(y=_ftp_wkg, line_dash="dot", line_color=C["yellow"],
-                                  annotation_text=f"Current FTP ({_ftp_wkg} W/kg)")
-        fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"],
-                                  annotation_text=f"Target ({_tgt_wkg} W/kg)", opacity=0.4)
+        fig_wkg_curve.add_hline(y=_ftp_wkg, line_dash="dot", line_color=C["yellow"])
+        fig_wkg_curve.add_hline(y=_tgt_wkg, line_dash="dot", line_color=C["green"], opacity=0.4)
+        # Invisible traces so reference lines appear in the top-right legend
+        fig_wkg_curve.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+            line=dict(color=C["yellow"], width=2, dash="dot"),
+            name=f"Current FTP ({_ftp_wkg} W/kg)"))
+        fig_wkg_curve.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+            line=dict(color=C["green"], width=2, dash="dot"),
+            name=f"Target ({_tgt_wkg} W/kg)"))
         _y_max = round(pc_df["wkg"].max() * 1.15, 1)
         fig_wkg_curve.update_yaxes(range=[0, _y_max])
         fig_wkg_curve.update_layout(title=f"W/kg at Each Duration — {_WEIGHT}kg Climber",
-            height=380, **PLOTLY_LAYOUT)
+            height=380, showlegend=True,
+            legend=dict(x=1, y=1, xanchor="right", yanchor="top",
+                        bgcolor=C["panel"], bordercolor=C["grid"]),
+            **PLOTLY_LAYOUT)
         st.plotly_chart(fig_wkg_curve, use_container_width=True)
 
 st.markdown("---")
