@@ -639,18 +639,18 @@ with col2:
         x=if_data["if_score"], nbinsx=30,
         marker_color=C["accent"], opacity=0.75, name="Sessions",
         showlegend=False))
-    fig_if_hist.add_vline(x=0.75, line_dash="dash", line_color=C["yellow"])
-    fig_if_hist.add_vline(x=0.85, line_dash="dash", line_color=C["green"])
-    fig_if_hist.add_vline(x=0.95, line_dash="dash", line_color=C["red"])
+    fig_if_hist.add_vline(x=0.75, line_dash="solid", line_color=C["yellow"], opacity=0.8)
+    fig_if_hist.add_vline(x=0.85, line_dash="solid", line_color=C["green"], opacity=0.8)
+    fig_if_hist.add_vline(x=0.95, line_dash="solid", line_color=C["red"], opacity=0.8)
     # Invisible traces — render as separated legend rows at top-left
     fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
-        line=dict(color=C["yellow"], width=2, dash="dash"),
+        line=dict(color=C["yellow"], width=2),
         name="0.75 — Z2/Z3 boundary"))
     fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
-        line=dict(color=C["green"], width=2, dash="dash"),
+        line=dict(color=C["green"], width=2),
         name="0.85 — Threshold start"))
     fig_if_hist.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
-        line=dict(color=C["red"], width=2, dash="dash"),
+        line=dict(color=C["red"], width=2),
         name="0.95 — VO2max zone"))
     fig_if_hist.update_layout(
         title=f"IF Distribution — {date_range}<br>"
@@ -1099,12 +1099,11 @@ with col2:
     fig_if = px.bar(type_if, x="if_score", y="training_type", orientation="h",
         color="if_score", title="Avg Intensity Factor by Type (All Time)",
         color_continuous_scale=[[0, C["accent"]], [0.5, C["yellow"]], [1, C["red"]]])
-    fig_if.add_vline(x=0.75, line_dash="dash", line_color=C["orange"],
-                      annotation_text="SST (0.75)")
-    fig_if.add_vline(x=0.85, line_dash="dash", line_color=C["red"],
-                      annotation_text="FTP (0.85)")
+    fig_if.add_vline(x=0.75, line_dash="solid", line_color=C["orange"], opacity=0.8)
+    fig_if.add_vline(x=0.85, line_dash="solid", line_color=C["red"], opacity=0.8)
     fig_if.update_layout(height=400, **PLOTLY_LAYOUT)
     st.plotly_chart(fig_if, use_container_width=True)
+    st.caption("Reference lines:  orange | 0.75 — SST boundary  ·  red | 0.85 — FTP threshold")
 
 st.markdown("---")
 
