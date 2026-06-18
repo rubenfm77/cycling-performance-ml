@@ -5,6 +5,7 @@ Cycling Performance Dashboard — Streamlit
 Run with: python -m streamlit run app.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -67,14 +68,33 @@ FTP_DRIVERS = ["FTP", "SST", "TEMPO", "PIRAMIDAL", "VO2MAX", "BILLAT", "Q-I INTE
 HOT_TEMP    = 28.0  # degrees C above which heat correction note appears
 
 
-def _fetch_from_api() -> pd.DataFrame:
-    """Fetch from Intervals.icu API — used on Streamlit Cloud when no local data."""
+def _get_api_credentials():
+    """Return (athlete_id, api_key) from st.secrets (Cloud) or .env (local)."""
     try:
         athlete_id = st.secrets["INTERVALS_ATHLETE_ID"]
         api_key    = st.secrets["INTERVALS_API_KEY"].replace("API_KEY:", "").strip()
+        if athlete_id and api_key:
+            return athlete_id, api_key
     except Exception:
+        pass
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    athlete_id = os.environ.get("INTERVALS_ATHLETE_ID")
+    api_key    = os.environ.get("INTERVALS_API_KEY", "").replace("API_KEY:", "").strip()
+    if athlete_id and api_key:
+        return athlete_id, api_key
+    return None, None
+
+
+def _fetch_from_api(days_back: int = 365) -> pd.DataFrame:
+    """Fetch from Intervals.icu API — works on Streamlit Cloud and local."""
+    athlete_id, api_key = _get_api_credentials()
+    if not athlete_id or not api_key:
         return pd.DataFrame()
-    date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+    date_from = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00")
     date_to   = datetime.now().strftime("%Y-%m-%dT23:59:59")
     try:
         r = requests.get(
@@ -171,22 +191,34 @@ def load_data():
         "Variability":            "variability",
     }
 
-    df = None
-    # ── Source 1: local files (your PC) ───────────────────────────────────────
-    # intervals_api.py fetches from the API and writes combined_training_data.csv
-    paths = ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]
-    for p in paths:
+    base_df = None
+    # ── Source 1: local historical base (CSV or Excel) ────────────────────────
+    for p in ["data/combined_training_data.csv", "data/JOIN_STRAVA_TP.xlsx"]:
         if Path(p).exists():
             if p.endswith(".csv"):
-                df = pd.read_csv(p)
+                base_df = pd.read_csv(p)
             else:
-                df = pd.read_excel(p)
-                df = df.rename(columns=excel_rename)
+                base_df = pd.read_excel(p).rename(columns=excel_rename)
             break
 
-    # ── Source 2: live Intervals.icu API (Streamlit Cloud, no local CSV) ──────
-    if df is None or len(df) == 0:
-        df = _fetch_from_api()
+    # ── Source 2: live Intervals.icu API (always — overlays recent activities) ─
+    # Fetches the last 60 days so new rides appear automatically every TTL cycle.
+    # On Streamlit Cloud (no local CSV) this also provides the full dataset.
+    recent = _fetch_from_api(days_back=60)
+
+    if base_df is not None and len(base_df) > 0 and len(recent) > 0:
+        base_df["date"] = pd.to_datetime(base_df["date"], errors="coerce")
+        recent["date"]  = pd.to_datetime(recent["date"],  errors="coerce")
+        api_dates = set(recent["date"].dt.date.astype(str))
+        base_df = base_df[~base_df["date"].dt.date.astype(str).isin(api_dates)]
+        df = pd.concat([base_df, recent], ignore_index=True)
+    elif base_df is not None and len(base_df) > 0:
+        df = base_df
+    elif len(recent) > 0:
+        df = recent
+    else:
+        df = pd.DataFrame()
+
     if df is None or len(df) == 0:
         st.error(
             "No data available. Add INTERVALS_ATHLETE_ID and INTERVALS_API_KEY "
@@ -285,12 +317,75 @@ def load_data():
 
 @st.cache_data(ttl=3600)
 def load_wellness():
+    athlete_id, api_key = _get_api_credentials()
     p = "data/wellness_data.csv"
     if Path(p).exists():
         df = pd.read_csv(p)
         df["date"] = pd.to_datetime(df["date"])
+        if not athlete_id:
+            return df
+        # Overlay the last 60 days from the API so new entries appear automatically
+        try:
+            date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+            date_to   = datetime.now().strftime("%Y-%m-%d")
+            r = requests.get(
+                f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness",
+                auth=("API_KEY", api_key),
+                params={"oldest": date_from, "newest": date_to},
+                timeout=15
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data:
+                recent = pd.json_normalize(data)
+                if "id" in recent.columns:
+                    recent["date"] = pd.to_datetime(recent["id"])
+                rename = {
+                    "restingHR": "resting_hr", "hrv": "hrv", "hrvSDNN": "hrv_sdnn",
+                    "weight": "weight", "sleepSecs": "sleep_secs",
+                    "sleepScore": "sleep_score", "fatigue": "wellness_fatigue",
+                    "mood": "mood", "motivation": "motivation", "kcalConsumed": "kcal",
+                }
+                recent = recent.rename(columns={k: v for k, v in rename.items() if k in recent.columns})
+                if "sleep_secs" in recent.columns:
+                    recent["sleep_h"] = pd.to_numeric(recent["sleep_secs"], errors="coerce") / 3600
+                api_dates = set(recent["date"].dt.date.astype(str))
+                df = df[~df["date"].dt.date.astype(str).isin(api_dates)]
+                df = pd.concat([df, recent], ignore_index=True).sort_values("date").reset_index(drop=True)
+        except Exception:
+            pass
         return df
-    return pd.DataFrame()
+    # No local CSV — try API for last 365 days
+    if not athlete_id:
+        return pd.DataFrame()
+    try:
+        date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        date_to   = datetime.now().strftime("%Y-%m-%d")
+        r = requests.get(
+            f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness",
+            auth=("API_KEY", api_key),
+            params={"oldest": date_from, "newest": date_to},
+            timeout=15
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return pd.DataFrame()
+        df = pd.json_normalize(data)
+        if "id" in df.columns:
+            df["date"] = pd.to_datetime(df["id"])
+        rename = {
+            "restingHR": "resting_hr", "hrv": "hrv", "hrvSDNN": "hrv_sdnn",
+            "weight": "weight", "sleepSecs": "sleep_secs",
+            "sleepScore": "sleep_score", "fatigue": "wellness_fatigue",
+            "mood": "mood", "motivation": "motivation", "kcalConsumed": "kcal",
+        }
+        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+        if "sleep_secs" in df.columns:
+            df["sleep_h"] = pd.to_numeric(df["sleep_secs"], errors="coerce") / 3600
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 df_all   = load_data()
