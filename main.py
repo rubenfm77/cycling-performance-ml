@@ -73,6 +73,12 @@ def run_pipeline(module: str = "all") -> None:
         df_anomaly = run_isolation_forest(df)
         plot_fatigue_detection(df_anomaly)
 
+    # ── Composition Analysis ──────────────────────────────────────────────────
+    if module in ("all", "composition"):
+        print("\n🔀 Running Training Composition Analysis...")
+        from src.monthly_composition_analysis import run_all as run_composition
+        run_composition(df)
+
     elapsed = time.time() - start
     print(f"\n{'='*55}")
     print(f"  ✅ Pipeline complete in {elapsed:.1f}s")
@@ -82,13 +88,14 @@ def run_pipeline(module: str = "all") -> None:
     print(f"     wkg_progression.png")
     print(f"     clustering.png")
     print(f"     fatigue_detection.png")
+    print(f"     composition_analysis.png")
     print(f"{'='*55}\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cycling Performance ML Pipeline")
     parser.add_argument("--module", default="all",
-                        choices=["all","pmc","ftp","wkg","cluster","fatigue"],
+                        choices=["all","pmc","ftp","wkg","cluster","fatigue","composition"],
                         help="Which module to run (default: all)")
     args = parser.parse_args()
     run_pipeline(args.module)

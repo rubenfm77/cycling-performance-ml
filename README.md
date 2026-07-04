@@ -27,14 +27,15 @@ cycling-performance-ml/
 │   ├── combined_training_data.csv # Merged API + historical
 │   └── wellness_data.csv          # Intervals.icu wellness
 ├── src/
-│   ├── config.py                  # Constants, zones, colours, athlete profile
-│   ├── data_loader.py             # Load + clean + feature engineering
-│   ├── pmc.py                     # Performance Management Chart (CTL/ATL/TSB)
-│   ├── ftp_analysis.py            # Random Forest — what drives FTP gains
-│   ├── wkg_progression.py         # W/kg regression + 12-week forecast
-│   ├── clustering.py              # K-Means + PCA — session archetypes
-│   ├── fatigue_detection.py       # Isolation Forest — overreach detection
-│   └── intervals_api.py           # Live Intervals.icu API pipeline
+│   ├── config.py                          # Constants, zones, colours, athlete profile
+│   ├── data_loader.py                     # Load + clean + feature engineering
+│   ├── pmc.py                             # Performance Management Chart (CTL/ATL/TSB)
+│   ├── ftp_analysis.py                    # Random Forest — what drives FTP gains (session level)
+│   ├── monthly_composition_analysis.py    # Composition mix → FTP outcomes (window level)
+│   ├── wkg_progression.py                 # W/kg regression + 12-week forecast
+│   ├── clustering.py                      # K-Means + PCA — session archetypes
+│   ├── fatigue_detection.py               # Isolation Forest — overreach detection
+│   └── intervals_api.py                   # Live Intervals.icu API pipeline
 ├── app.py                         # Streamlit dashboard
 ├── main.py                        # Run full ML pipeline
 ├── METRICS_GLOSSARY.md            # Every metric explained in plain language
@@ -77,6 +78,13 @@ cycling-performance-ml/
 - TSS split: quality vs base volume
 - Weekly FTP stimulus trend with 4-week rolling average
 
+### 🔀 Training Composition Analysis *(new)*
+- Stacked bar: % TSS by training type per calendar month — see how the mix has shifted over 6 years
+- FTP proxy trend aligned beneath so you can visually correlate composition shifts with fitness peaks
+- Pattern comparison table: Single-dominant vs Mixed months and their next-month FTP outcome
+- Top combination ranking: best-performing 3-type combos by average next-month FTP gain
+  (sample-size caveats shown inline — combos with n < 3 flagged)
+
 ### ⚡ Power Curve
 - Best efforts at 5s / 1min / 5min / 10min / 20min / 30min / 60min
 - W/kg at each duration with target reference lines
@@ -103,10 +111,16 @@ cycling-performance-ml/
 
 | Module | Method | Question answered |
 |---|---|---|
-| `ftp_analysis.py` | Random Forest + feature importance | Which training types most drive FTP? |
+| `ftp_analysis.py` | Random Forest + feature importance | Which training types most drive FTP? *(session level)* |
+| `monthly_composition_analysis.py` | Correlation + RF (exploratory) | Does the *mix* of types per month outperform any single dominant type? |
 | `wkg_progression.py` | Linear regression + Ridge | Where is W/kg heading? |
 | `clustering.py` | K-Means + PCA | Hidden session archetypes? |
 | `fatigue_detection.py` | Isolation Forest | When is fatigue genuine overreach? |
+
+> **Small-sample caveat on composition analysis:** ~72 independent calendar-month
+> windows over 6 years.  Any finding with |r| < 0.3 or p > 0.10 should be treated
+> as noise at this sample size.  The RF is exploratory — it surfaces which
+> composition features *might* matter, not which ones *do* matter.
 
 ---
 
@@ -177,6 +191,32 @@ Six years and four ML models converge on a clear picture of what actually drives
 **Post-surgery recovery**
 - The Ridge regression model projects W/kg recovery to pre-surgery levels within 6 months — conditional on Norwegian-compliant training load
 - Annual peak FTP comparison confirms a consistent winter base-building pattern: CTL peaks in March, race-form peaks May–June
+
+### Training Composition (monthly-window analysis)
+
+> ⚠️ **Small-sample caveat:** ~72 independent calendar-month windows.  All
+> findings are directional signals, not statistically robust conclusions.
+
+The composition analysis answers a different question from `ftp_analysis.py`:
+not *which session type* has the highest average stimulus, but *which monthly
+mix* correlates with FTP gains in the following month.
+
+Key results (run `python main.py --module composition` to reproduce with your data):
+
+- **FTP proxy** used as outcome: `max(NP) × 0.95` per month — an approximation,
+  not a structured test.  Interpret month-over-month changes as directional.
+- **Single-dominant vs mixed:** the ranked table and correlations show whether
+  months where one type dominates >50% of quality TSS outperform months with
+  a balanced 2–3 type mix.  Results may contradict the per-session ranking in
+  `ftp_analysis.py` — if so, the composition view is the correct one for
+  periodisation planning since it captures training block structure, not just
+  individual session quality.
+- **CTL/TSB context flag:** FTP gains that occur after high-TSB (fresh) windows
+  should be read with caution — they may reflect freshness, not adaptation.
+  Filter by `tsb_end < 10` to isolate fatigue-normalised gains.
+- **Dashboard visual:** the "Training Composition Analysis" tab in the Streamlit
+  dashboard shows the stacked-bar composition chart aligned with the FTP trend
+  so you can visually identify which historical compositions preceded your peaks.
 
 ---
 

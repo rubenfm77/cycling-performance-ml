@@ -1002,6 +1002,233 @@ with col2:
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TRAINING COMPOSITION ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🔀 Training Composition Analysis")
+st.caption(
+    "Does the *mix* of training types over a calendar month predict better FTP "
+    "outcomes than any single dominant type?  Each bar shows % TSS by training "
+    "type per month.  The FTP trend below lets you visually spot which "
+    "composition periods preceded your actual peaks (e.g. the 275W era). "
+    "⚠️ ~72 independent monthly observations over 6 years — treat correlations "
+    "as hypothesis-generating, not confirmatory."
+)
+
+# ── Build monthly composition data ────────────────────────────────────────────
+_COMP_FTP_DRIVERS = ["FTP", "SST", "TEMPO", "PIRAMIDAL", "VO2MAX", "BILLAT", "Q-I INTERVALS"]
+
+_comp_all = df_all[df_all["training_type"].isin(MAIN_TYPES)].copy()
+_comp_all["_month"] = _comp_all["date"].dt.to_period("M")
+
+# % TSS by type per month (long format, for stacked bar)
+_monthly_type_tss = (
+    _comp_all.groupby(["_month", "training_type"])["tss"].sum().reset_index()
+)
+_monthly_type_tss.columns = ["_month", "training_type", "type_tss"]
+_monthly_totals = _comp_all.groupby("_month")["tss"].sum().rename("month_tss").reset_index()
+_monthly_type_tss = _monthly_type_tss.merge(_monthly_totals, on="_month")
+_monthly_type_tss["pct_tss"]  = _monthly_type_tss["type_tss"] / _monthly_type_tss["month_tss"] * 100
+_monthly_type_tss["month_dt"] = _monthly_type_tss["_month"].apply(lambda p: p.start_time)
+
+# Build per-month outcome table (wide format)
+_outcome_rows = []
+for period, grp in _comp_all.groupby("_month"):
+    total_tss = grp["tss"].sum()
+    if total_tss == 0:
+        continue
+    tss_by_type = grp.groupby("training_type")["tss"].sum()
+    q_grp       = grp[grp["training_type"].isin(_COMP_FTP_DRIVERS)]
+    q_tss       = q_grp["tss"].sum()
+    q_by_type   = q_grp.groupby("training_type")["tss"].sum()
+
+    if len(q_by_type) > 0 and q_tss > 0:
+        qdom_pct = float(q_by_type.max() / q_tss * 100)
+        qdom     = q_by_type.idxmax()
+        if qdom_pct > 50:
+            pattern = f"Single: {qdom}"
+        else:
+            top2    = q_by_type.nlargest(2).index.tolist()
+            pattern = "Mixed: " + "+".join(sorted(top2))
+    else:
+        pattern = "No quality sessions"
+
+    top3  = "+".join(sorted(tss_by_type.nlargest(3).index.tolist()))
+    _outcome_rows.append({
+        "period":    str(period),
+        "month_dt":  period.start_time,
+        "total_tss": total_tss,
+        "quality_pct": q_tss / total_tss * 100 if total_tss > 0 else 0,
+        "pattern":   pattern,
+        "combo":     top3,
+    })
+
+_outcome_df = pd.DataFrame(_outcome_rows).sort_values("period").reset_index(drop=True)
+
+# FTP proxy: best NP (fall back to avg power) × 0.95 per month, from ALL sessions
+_pwr_for_proxy = df_all["power_np"].fillna(df_all["power_avg"])
+_df_proxy      = df_all.copy()
+_df_proxy["_pwr"]   = pd.to_numeric(_pwr_for_proxy, errors="coerce")
+_df_proxy["_month"] = _df_proxy["date"].dt.to_period("M")
+_proxy_monthly = (
+    _df_proxy[_df_proxy["_pwr"].fillna(0) > 50]
+    .groupby("_month")["_pwr"]
+    .max()
+    .reset_index()
+)
+_proxy_monthly.columns = ["_month", "best_pwr"]
+_proxy_monthly["ftp_proxy"]  = _proxy_monthly["best_pwr"] * 0.95
+_proxy_monthly["month_dt"]   = _proxy_monthly["_month"].apply(lambda p: p.start_time)
+_proxy_monthly["ftp_trend"]  = _proxy_monthly["ftp_proxy"].rolling(3, min_periods=2).mean()
+_proxy_monthly["ftp_gain"]   = _proxy_monthly["ftp_proxy"].diff()
+
+# Merge FTP proxy into outcome table
+_outcome_df = _outcome_df.merge(
+    _proxy_monthly[["_month", "ftp_proxy", "ftp_gain"]].assign(
+        _month=lambda x: x["_month"].astype(str)
+    ),
+    left_on="period", right_on="_month", how="left"
+).drop(columns=["_month"], errors="ignore")
+
+# ── Chart 1: Stacked bar — composition over time ──────────────────────────────
+TYPE_COLOR_MAP = {
+    "END": C["accent"], "AEROBIC BASE": C["green"], "FTP": C["red"],
+    "SST": C["orange"], "TEMPO": C["yellow"], "PIRAMIDAL": C["purple"],
+    "VO2MAX": "#ff7b72", "BILLAT": "#79c0ff", "FATMAX": "#56d364",
+    "TORQUE": "#ffa657", "Q-I INTERVALS": "#e3b341",
+}
+
+fig_comp = go.Figure()
+for t in MAIN_TYPES:
+    t_data = (
+        _monthly_type_tss[_monthly_type_tss["training_type"] == t]
+        .sort_values("month_dt")
+    )
+    if len(t_data) == 0:
+        continue
+    fig_comp.add_trace(go.Bar(
+        x=t_data["month_dt"],
+        y=t_data["pct_tss"],
+        name=t,
+        marker_color=TYPE_COLOR_MAP.get(t, C["muted"]),
+        opacity=0.85,
+        hovertemplate=f"<b>{t}</b><br>%{{y:.1f}}% of TSS<br>%{{x|%b %Y}}<extra></extra>",
+    ))
+
+fig_comp.update_layout(
+    barmode="stack",
+    title="Monthly Training Composition — % TSS by Type (All Time)",
+    height=420,
+    legend=dict(
+        bgcolor=C["panel"], bordercolor=C["grid"],
+        orientation="h", x=0, y=1.08, xanchor="left",
+    ),
+    **PLOTLY_LAYOUT,
+)
+st.plotly_chart(fig_comp, use_container_width=True)
+
+# ── Chart 2: FTP proxy trend (reference for the composition above) ────────────
+fig_ftp_ref = go.Figure()
+fig_ftp_ref.add_trace(go.Scatter(
+    x=_proxy_monthly["month_dt"], y=_proxy_monthly["ftp_proxy"],
+    mode="lines+markers",
+    name="FTP proxy (best NP × 0.95)",
+    line=dict(color=C["purple"], width=2.5),
+    marker=dict(size=4),
+    fill="tozeroy", fillcolor="rgba(188,140,255,0.08)",
+))
+fig_ftp_ref.add_trace(go.Scatter(
+    x=_proxy_monthly["month_dt"], y=_proxy_monthly["ftp_trend"],
+    mode="lines",
+    name="3-month trend",
+    line=dict(color=C["accent"], width=2, dash="dash"),
+))
+fig_ftp_ref.add_hline(y=275, line_dash="dot", line_color=C["green"], opacity=0.5,
+                       annotation_text="275W peak")
+fig_ftp_ref.add_hline(y=235, line_dash="dot", line_color=C["yellow"],
+                       annotation_text="235W current")
+fig_ftp_ref.add_vline(x=pd.Timestamp("2025-06-01"), line_dash="dash",
+                       line_color=C["red"], opacity=0.7,
+                       annotation_text="Surgery")
+fig_ftp_ref.update_layout(
+    title="FTP Proxy Trend — correlate with composition bars above<br>"
+          "<sup>Which months of mixed training preceded your 275W peak?</sup>",
+    height=320,
+    **PLOTLY_LAYOUT,
+)
+st.plotly_chart(fig_ftp_ref, use_container_width=True)
+
+# ── Tables: pattern comparison + top combinations ─────────────────────────────
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("**Training Pattern vs Next-Month FTP Change**")
+    st.caption(
+        "Single-dominant: one type >50% of quality (FTP-driver) TSS.  "
+        "Mixed: two or more types share quality TSS without one dominating."
+    )
+    _valid_outcome = _outcome_df[_outcome_df["ftp_gain"].notna()]
+    if len(_valid_outcome) > 0:
+        _pattern_summary = (
+            _valid_outcome.groupby("pattern")
+            .agg(
+                Months       = ("ftp_gain", "count"),
+                Avg_gain     = ("ftp_gain", "mean"),
+                Median_gain  = ("ftp_gain", "median"),
+                Avg_TSS      = ("total_tss", "mean"),
+            )
+            .reset_index()
+            .sort_values("Avg_gain", ascending=False)
+            .round(1)
+        )
+        _pattern_summary.columns = ["Pattern", "Months", "Avg FTP Δ (W)", "Median Δ (W)", "Avg TSS"]
+        st.dataframe(_pattern_summary, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Avg FTP Δ (W)": st.column_config.NumberColumn(format="%.1f"),
+                         "Median Δ (W)":  st.column_config.NumberColumn(format="%.1f"),
+                     })
+        st.caption(
+            "FTP Δ = next month's FTP proxy minus this month's.  "
+            "Positive = FTP proxy went up the following month.  "
+            f"⚠️ {len(_valid_outcome)} independent monthly observations — "
+            "treat as directional, not statistically robust."
+        )
+    else:
+        st.info("Not enough data for pattern comparison.")
+
+with col2:
+    st.markdown("**Top Training Combinations (by next-month FTP gain)**")
+    st.caption("Top-3 types by TSS share within each month, ranked by avg next-month FTP proxy gain.")
+    if len(_valid_outcome) > 0:
+        _combo_summary = (
+            _valid_outcome.groupby("combo")
+            .agg(
+                Months   = ("ftp_gain", "count"),
+                Avg_gain = ("ftp_gain", "mean"),
+                Avg_TSS  = ("total_tss", "mean"),
+            )
+            .reset_index()
+            .sort_values("Avg_gain", ascending=False)
+            .head(15)
+            .round(1)
+        )
+        _combo_summary.columns = ["Combination", "Months", "Avg FTP Δ (W)", "Avg TSS"]
+        _combo_summary["Reliable"] = _combo_summary["Months"].apply(
+            lambda n: "✓" if n >= 3 else "⚠ n<3"
+        )
+        st.dataframe(_combo_summary, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Avg FTP Δ (W)": st.column_config.NumberColumn(format="%.1f"),
+                     })
+        st.caption(
+            "⚠️ Most combinations appear only 1–2 times.  "
+            "Only rows marked ✓ (n ≥ 3) have enough repetitions to be directional."
+        )
+    else:
+        st.info("Not enough data for combination ranking.")
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ELEVATION
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("## 🏔️ Elevation — Climber Stats")
