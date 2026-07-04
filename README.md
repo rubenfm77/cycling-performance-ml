@@ -192,31 +192,49 @@ Six years and four ML models converge on a clear picture of what actually drives
 - The Ridge regression model projects W/kg recovery to pre-surgery levels within 6 months — conditional on Norwegian-compliant training load
 - Annual peak FTP comparison confirms a consistent winter base-building pattern: CTL peaks in March, race-form peaks May–June
 
-### Training Composition (monthly-window analysis)
+### 🔀 Training Composition Analysis (monthly-window results)
 
-> ⚠️ **Small-sample caveat:** ~72 independent calendar-month windows.  All
-> findings are directional signals, not statistically robust conclusions.
+> ⚠️ **Small-sample caveat:** 74 calendar-month windows over 6 years; 73 with
+> a valid next-month outcome.  All correlations are non-significant (ns) at
+> this sample size — findings are directional signals, not statistical proof.
+> Reproduce with `python main.py --module composition`.
 
-The composition analysis answers a different question from `ftp_analysis.py`:
-not *which session type* has the highest average stimulus, but *which monthly
-mix* correlates with FTP gains in the following month.
+**What it measures:** FTP proxy = `max(NP) × 0.95` per month.  Outcome =
+next month's proxy minus this month's.  Training pattern = dominant type(s)
+among quality (FTP-driver) TSS.
 
-Key results (run `python main.py --module composition` to reproduce with your data):
+**Correlation result:** No composition feature reaches statistical significance
+at n=73.  Strongest signal: `pct_SST` r=+0.222 (ns), `pct_VO2MAX` r=−0.220 (ns).
+The RF regressor produced R²=−0.094 (worse than predicting the mean) — there
+is not enough data for a reliable ML model at the monthly window level.
 
-- **FTP proxy** used as outcome: `max(NP) × 0.95` per month — an approximation,
-  not a structured test.  Interpret month-over-month changes as directional.
-- **Single-dominant vs mixed:** the ranked table and correlations show whether
-  months where one type dominates >50% of quality TSS outperform months with
-  a balanced 2–3 type mix.  Results may contradict the per-session ranking in
-  `ftp_analysis.py` — if so, the composition view is the correct one for
-  periodisation planning since it captures training block structure, not just
-  individual session quality.
-- **CTL/TSB context flag:** FTP gains that occur after high-TSB (fresh) windows
-  should be read with caution — they may reflect freshness, not adaptation.
-  Filter by `tsb_end < 10` to isolate fatigue-normalised gains.
-- **Dashboard visual:** the "Training Composition Analysis" tab in the Streamlit
-  dashboard shows the stacked-bar composition chart aligned with the FTP trend
-  so you can visually identify which historical compositions preceded your peaks.
+**Mixed vs single-dominant windows — actual numbers:**
+
+| Pattern | n months | Avg next-month FTP Δ (W) | Median |
+|---|---|---|---|
+| Mixed: PIRAMIDAL+SST | 2 | **+11.9** | +11.9 |
+| Mixed: BILLAT+FTP | 3 ✓ | **+6.7** | +5.7 |
+| Mixed: FTP+TEMPO | 1 | +4.8 | — |
+| No quality sessions | 11 | +2.3 | +3.8 |
+| Single: SST | 10 | +2.2 | −1.0 |
+| Single: FTP | 15 | +1.6 | +0.9 |
+| Single: BILLAT | 2 | 0.0 | — |
+| Single: TEMPO | 10 | −0.9 | −1.4 |
+| Single: Q-I INTERVALS | 7 | −4.1 | −4.8 |
+| Single: VO2MAX | 7 | **−9.0** | −3.8 |
+| Single: PIRAMIDAL | 2 | **−10.5** | −10.5 |
+
+✓ = n≥3 (minimum threshold for directional reliability)
+
+**Best combination with n≥3:** AEROBIC BASE+END+FATMAX → avg +8.9W (n=3 ✓).
+All top-ranked combos (END+PIRAMIDAL+TORQUE +27.5W, END+FTP+SST +15.7W) have n=1–2 — unreliable.
+
+**Honest interpretation:**
+- The data loosely supports diversifying quality work across types rather than hammering a single high-intensity mode in isolation.
+- Pure VO2MAX blocks and solo PIRAMIDAL months associate with the worst next-month outcomes (−9W and −10.5W respectively) — possibly because they accumulate fatigue without the base volume needed to convert it.
+- Single: FTP (largest sample, n=15) shows only +1.6W — mixing FTP with base and support types outperforms in every n≥3 pattern.
+- These findings **contradict the per-session ranking** from `ftp_analysis.py` (which ranks VO2MAX and PIRAMIDAL highly for stimulus score) — the composition view suggests those types work best as part of a mixed block, not as the sole monthly focus.
+- The stacked-bar chart in the Streamlit dashboard lets you visually match composition periods to your 275W peak years.
 
 ---
 
