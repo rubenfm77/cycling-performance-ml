@@ -189,6 +189,7 @@ def load_data():
         "Average Cadence":        "cadence",
         "Average Temperature":    "temp_avg",
         "Variability":            "variability",
+        "icu_pm_p_max":           "vo2max_power",
     }
 
     base_df = None
@@ -255,6 +256,21 @@ def load_data():
         _eftp = pd.to_numeric(df["icu_rolling_ftp"], errors="coerce")
         if "eftp" not in df.columns or _eftp.notna().sum() > pd.to_numeric(df.get("eftp"), errors="coerce").notna().sum():
             df["eftp"] = _eftp
+
+    # VO2max estimate (ACSM leg-cycling equation: 10.8 × W/kg + 7).
+    # Only populated where Intervals.icu has fitted a power-curve model
+    # (icu_pm_p_max) to the athlete's recent activities — for this athlete
+    # that's currently a Feb–Jun 2026 window only, not the full history.
+    if "vo2max_power" not in df.columns and "icu_pm_p_max" in df.columns:
+        df["vo2max_power"] = df["icu_pm_p_max"]
+    if "vo2max_power" not in df.columns:
+        df["vo2max_power"] = np.nan
+    df["vo2max_power"] = pd.to_numeric(df["vo2max_power"], errors="coerce")
+    df["vo2max_est"] = np.where(
+        df["vo2max_power"].notna(),
+        10.8 * (df["vo2max_power"] / df["weight"]) + 7,
+        np.nan
+    )
 
     df["ctl"] = df["tss"].ewm(span=42, adjust=False).mean()
     df["atl"] = df["tss"].ewm(span=7,  adjust=False).mean()
@@ -526,6 +542,52 @@ state_guide = {
     "Peak/Detrain Risk": "⚡ Peak form — race or start next block",
 }
 st.info(state_guide.get(state, ""))
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VO2MAX ESTIMATE (POWER-CURVE BASED)
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🫁 VO2max Estimate (Power-Curve Based)")
+st.caption(
+    "ACSM leg-cycling equation — VO2max (ml/kg/min) = 10.8 × (Watts/kg) + 7 — "
+    "using each session's modeled max power (icu_pm_p_max) and logged body weight. "
+    "Only sessions with a fitted power-curve model carry this value; for this "
+    "athlete that's currently a Feb–Jun 2026 window, not a multi-year trend. "
+    "All-time data regardless of time filter."
+)
+
+vo2_data = df_all[df_all["vo2max_est"].notna()].sort_values("date")
+
+if len(vo2_data) > 0:
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        latest_vo2 = vo2_data.iloc[-1]["vo2max_est"]
+        first_vo2  = vo2_data.iloc[0]["vo2max_est"]
+        st.metric("Latest Est. VO2max", f"{latest_vo2:.1f} ml/kg/min",
+                  delta=f"{latest_vo2 - first_vo2:+.1f} vs window start")
+        st.caption(
+            f"{len(vo2_data)} sessions with power-curve model data "
+            f"({vo2_data['date'].min().strftime('%d %b %Y')} → "
+            f"{vo2_data['date'].max().strftime('%d %b %Y')})"
+        )
+    with col2:
+        fig_vo2 = go.Figure()
+        fig_vo2.add_trace(go.Scatter(
+            x=vo2_data["date"], y=vo2_data["vo2max_est"],
+            mode="lines+markers", name="Est. VO2max",
+            line=dict(color=C["green"], width=2.5), marker=dict(size=6),
+            fill="tozeroy", fillcolor="rgba(63,185,80,0.1)"))
+        fig_vo2.update_layout(
+            title="Estimated VO2max Over Time (ml/kg/min)",
+            height=300, **PLOTLY_LAYOUT)
+        st.plotly_chart(fig_vo2, use_container_width=True)
+else:
+    st.info(
+        "No power-curve model data (icu_pm_p_max) available yet to estimate "
+        "VO2max. This populates once Intervals.icu fits a critical-power model "
+        "to recent activities."
+    )
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
