@@ -53,10 +53,11 @@ cycling-performance-ml/
 - W/kg 10-session rolling average
 - Colour-coded fatigue state with automatic recommendation
 
-### 🫁 VO2max Estimate *(new)*
+### 🩺 VO2max Estimate *(new)*
 - Estimated via the ACSM leg-cycling equation — VO2max (ml/kg/min) = 10.8 × (Watts/kg) + 7
-- Uses each session's modeled max power (`icu_pm_p_max`) and logged body weight
-- Only populated where Intervals.icu has fitted a power-curve model to recent activities — currently a Feb–Jun 2026 window, not a multi-year trend
+- Uses each session's Critical Power (`icu_pm_cp`) and logged body weight
+- CP reflects a sustainable effort, not the shorter maximal ramp-test power the formula was originally built around — likely undershoots true VO2max somewhat
+- Only populated where Intervals.icu has fitted a power-curve model to recent activities
 - Power-based estimate, not a lab VO2max test — track it as a directional trend, not an absolute number
 
 ### 🔬 Objective Fatigue Signals
@@ -248,7 +249,7 @@ All top-ranked combos (END+PIRAMIDAL+TORQUE +27.5W, END+FTP+SST +15.7W) have n=1
 
 - **Strava** → distance, elevation, speed, HR
 - **TrainingPeaks** → TSS, IF, NP, power zones
-- **Intervals.icu API** → eFTP, CTL, ATL, efficiency, wellness, power-curve model (`icu_pm_p_max`, used for VO2max estimate)
+- **Intervals.icu API** → eFTP, CTL, ATL, efficiency, wellness, power-curve model (`icu_pm_cp`, used for VO2max estimate)
 - **Wahoo ELEMNT** → raw power, L/R balance, temperature, cadence
 
 ---

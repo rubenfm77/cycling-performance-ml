@@ -189,7 +189,7 @@ def load_data():
         "Average Cadence":        "cadence",
         "Average Temperature":    "temp_avg",
         "Variability":            "variability",
-        "icu_pm_p_max":           "vo2max_power",
+        "icu_pm_cp":              "vo2max_power",
     }
 
     base_df = None
@@ -259,10 +259,16 @@ def load_data():
 
     # VO2max estimate (ACSM leg-cycling equation: 10.8 × W/kg + 7).
     # Only populated where Intervals.icu has fitted a power-curve model
-    # (icu_pm_p_max) to the athlete's recent activities — for this athlete
-    # that's currently a Feb–Jun 2026 window only, not the full history.
-    if "vo2max_power" not in df.columns and "icu_pm_p_max" in df.columns:
-        df["vo2max_power"] = df["icu_pm_p_max"]
+    # (icu_pm_cp — Critical Power) to the athlete's recent activities.
+    # NOTE: icu_pm_p_max (a different field) was tried first but produced
+    # physiologically impossible values (~90 ml/kg/min) — it's most likely
+    # the power-curve model's instantaneous/sprint-ceiling parameter, not a
+    # sustained maximal-effort power, and isn't valid input for this formula.
+    # CP is a genuine sustainable-effort value, so it undershoots the classic
+    # 8-12min ramp-test power the ACSM formula was built around, but produces
+    # a believable, trackable number instead of a nonsense one.
+    if "vo2max_power" not in df.columns and "icu_pm_cp" in df.columns:
+        df["vo2max_power"] = df["icu_pm_cp"]
     if "vo2max_power" not in df.columns:
         df["vo2max_power"] = np.nan
     df["vo2max_power"] = pd.to_numeric(df["vo2max_power"], errors="coerce")
@@ -547,12 +553,14 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 # VO2MAX ESTIMATE (POWER-CURVE BASED)
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("## 🫁 VO2max Estimate (Power-Curve Based)")
+st.markdown("## 🩺 VO2max Estimate (Power-Curve Based)")
 st.caption(
     "ACSM leg-cycling equation — VO2max (ml/kg/min) = 10.8 × (Watts/kg) + 7 — "
-    "using each session's modeled max power (icu_pm_p_max) and logged body weight. "
-    "Only sessions with a fitted power-curve model carry this value; for this "
-    "athlete that's currently a Feb–Jun 2026 window, not a multi-year trend. "
+    "using each session's Critical Power (icu_pm_cp) and logged body weight. "
+    "CP reflects a sustainable effort, not the shorter maximal ramp-test power "
+    "the formula was originally built around, so this likely undershoots true "
+    "VO2max somewhat — treat it as a directional trend, not an absolute number. "
+    "Only sessions with a fitted power-curve model carry this value. "
     "All-time data regardless of time filter."
 )
 
@@ -583,7 +591,7 @@ if len(vo2_data) > 0:
         st.plotly_chart(fig_vo2, use_container_width=True)
 else:
     st.info(
-        "No power-curve model data (icu_pm_p_max) available yet to estimate "
+        "No power-curve model data (icu_pm_cp) available yet to estimate "
         "VO2max. This populates once Intervals.icu fits a critical-power model "
         "to recent activities."
     )
